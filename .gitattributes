@@ -1,0 +1,11 @@
+# Normalize line endings: store text as LF in the repo so Colab/Linux runs are
+# byte-identical to local Windows checkouts. Prevents CRLF churn in diffs.
+* text=auto eol=lf
+
+# Notebooks are JSON text.
+*.ipynb text eol=lf
+
+# Treat data/model blobs as binary (defensive; data/ is gitignored anyway).
+*.parquet binary
+*.npy binary
+*.memmap binary

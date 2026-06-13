@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantra"
+version = "0.1.0"
+description = "Quantra — a PPO+MLP reinforcement-learning agent built to repeatedly pass FTMO-style trading challenges."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "monty313" }]
+keywords = ["reinforcement-learning", "ppo", "trading", "ftmo", "mt5"]
+
+# Runtime deps mirror requirements.txt; kept loose so Colab's preinstalled stack
+# satisfies them. The MT5 live bridge is Windows-only and optional.
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "torch>=2.1",
+    "gymnasium>=0.29",
+    "statsmodels>=0.14",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.7",
+    "pyarrow>=14.0",
+    "psutil>=5.9",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+viz = ["seaborn>=0.12"]
+data = ["gdown>=5.1"]
+gpu = ["nvidia-ml-py>=12.535"]
+hpo = ["optuna>=3.5"]
+doctor = ["anthropic>=0.40"]
+live = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
+dev = ["pytest>=7.4", "ruff>=0.5"]
+
+[project.scripts]
+# CLI entry points (SOW §12.1). live_runner lands in M14.
+quantra-hardware = "quantra.runtime.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["quantra*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

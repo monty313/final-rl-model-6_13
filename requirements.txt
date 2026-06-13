@@ -1,0 +1,43 @@
+# Quantra dependencies. Pinned-loose (>=) so Colab's preinstalled versions satisfy
+# them without forcing slow reinstalls. Install with:  pip install -r requirements.txt
+#
+# Colab already ships torch, numpy, pandas, scipy, scikit-learn, matplotlib — so a
+# fresh Colab session usually only needs the lines marked [colab-extra].
+
+# --- core numerics + RL ---
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+torch>=2.1                 # the policy/critic; CPU build is fine for the 3x256 MLP
+gymnasium>=0.29            # env API
+
+# --- features / stats ---
+statsmodels>=0.14          # ADF test for the Stationarity Regime Gate
+scikit-learn>=1.3          # PCA for the hidden-state projection visual
+
+# --- diagnostics / visuals ---
+matplotlib>=3.7
+seaborn>=0.12              # correlation heatmap + atlases   [colab-extra]
+
+# --- data IO ---
+pyarrow>=14.0              # Parquet cache                    [colab-extra]
+gdown>=5.1                 # pull price CSVs from Drive by ID [colab-extra]
+
+# --- hardware optimizer ---
+psutil>=5.9                # CPU utilisation sampling          [colab-extra]
+nvidia-ml-py>=12.535       # GPU utilisation (pynvml); optional, GPU runtimes only
+
+# --- HPO ---
+optuna>=3.5               # non-sacred-dial tuning (M13)      [colab-extra]
+
+# --- progress / utils ---
+tqdm>=4.66
+
+# --- live bridge (Windows + MT5 only; ignored elsewhere) ---
+MetaTrader5>=5.0.45 ; platform_system == "Windows"
+
+# --- optional: LLM Risk Doctor live calls (M11). The module also runs offline. ---
+anthropic>=0.40           # optional                          [colab-extra]
+
+# --- dev / test ---
+pytest>=7.4
