@@ -145,10 +145,11 @@ class RuntimeConfig:
     symbols: List[str] = field(default_factory=lambda: list(SYMBOLS))
     seed: int = 0
 
-    # Nominal state-vector width for the *startup* benchmark only. The real width
-    # is asserted by the FeatureBuilder (M2) against STATE_VECTOR.md (~145). We
-    # never let this nominal value leak into training shapes.
-    nominal_state_dim: int = 145
+    # Nominal state-vector width for the *startup* benchmark only. Mirrors
+    # quantra.market_pipeline.feature_builder.schema.STATE_DIM (146) without
+    # importing it (avoids an import cycle); the master suite asserts they match.
+    # We never let this nominal value leak into training shapes.
+    nominal_state_dim: int = 146
 
     def to_dict(self) -> dict:
         """Flatten for telemetry's run-config block (M9 data contract)."""
@@ -190,3 +191,10 @@ def in_colab() -> bool:
 #   R: SOW-A3 (2.5%/4.0% configurable, never hardcoded strategy) + the new IRAC rule.
 #   A: Annotated every constant for its FTMO role; defaults now asserted in the master suite (Section A).
 #   C: The bot always trains/judges against the real 2.5%/4% walls, so a 'pass' is reproducible and meaningful.
+# [2026-06-13] nominal_state_dim 145 -> 146 to match the M2 schema.
+#   I: The benchmark's nominal width (145) no longer matched the real observation
+#      width once M2 fixed the canonical layout at 146.
+#   R: STATE_VECTOR.md (~145) realised as schema.STATE_DIM = 146; keep config import-cycle-free.
+#   A: Set nominal_state_dim = 146; the master suite now asserts config == schema.
+#   C: The hardware race times the true observation width, so the device/cost choice
+#      reflects the real workload — no wasted GPU spend, faster path to a validated pass rate.

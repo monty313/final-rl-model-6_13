@@ -38,11 +38,21 @@ from __future__ import annotations
 import os
 import time
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import quantra.runtime.config as cfg
 from quantra.market_pipeline.data_loader import OHLCV_COLUMNS, load_symbol, parse_mt5_csv
+from quantra.market_pipeline.feature_builder import (
+    MARKET_DIM,
+    MARKET_NAMES,
+    SCHEMA,
+    STATE_DIM,
+    assemble_state,
+    build_market_matrix,
+)
+from quantra.market_pipeline.feature_builder.schema import EXPECTED_WIDTHS
 from quantra.market_pipeline.resampler import (
     as_of_higher_tf,
     build_all_timeframes,
@@ -218,6 +228,82 @@ def test_as_of_merge_has_no_lookahead(make_1m):
             assert val == eligible["close"].iloc[-1]  # last CLOSED bar only
 
 
+# =============================================================================
+# SECTION D — FEATURE BUILDER + STATE VECTOR (~145 scalars)
+# FTMO link: a complete, bounded, lookahead-free observation is what lets the MLP
+# tell breach-risk from safe trading (Term 1). Drift, leakage, or NaN here is a top
+# root cause of inconsistent passing — these guards make all three impossible.
+# =============================================================================
+def test_schema_total_is_146_and_blocks_match():
+    assert STATE_DIM == 146
+    for name, width in EXPECTED_WIDTHS.items():
+        s, e = SCHEMA.block_spans[name]
+        assert e - s == width, f"block {name} width drifted"
+    assert len(SCHEMA.feature_names) == STATE_DIM
+    assert len(set(SCHEMA.feature_names)) == STATE_DIM  # names unique
+
+
+def test_config_nominal_state_dim_matches_schema():
+    """The hardware race must time the TRUE observation width (no wasted spend)."""
+    from quantra.runtime import RuntimeConfig
+
+    assert RuntimeConfig().nominal_state_dim == STATE_DIM
+
+
+def test_market_matrix_shape_finite_and_clipped(make_1m):
+    df = make_1m(n_bars=4000, seed=20)
+    mm = build_market_matrix(df)
+    assert mm.matrix.shape == (4000, MARKET_DIM)          # (T, 89)
+    assert mm.matrix.dtype == np.float32
+    assert np.isfinite(mm.matrix).all()                   # no NaN/inf reaches the policy
+    assert np.abs(mm.matrix).max() <= 10.0 + 1e-4         # clipped -> stable MLP
+    assert mm.names == MARKET_NAMES                        # telemetry block labels intact
+
+
+def test_market_features_carry_signal(make_1m):
+    """Fast 1m features must vary after warmup (real signal, not a dead constant)."""
+    mm = build_market_matrix(make_1m(n_bars=4000, seed=21))
+    for feat in ["z10_1m", "cci10_norm_1m", "candle_return_1m"]:
+        col = mm.matrix[1000:, MARKET_NAMES.index(feat)]
+        assert col.std() > 0, f"{feat} is constant"
+
+
+def test_feature_builder_has_no_lookahead(make_1m):
+    """Building on a truncated series reproduces the same row -> no forward peek.
+
+    This is THE guard against a fantasy edge: if features at bar t changed when
+    future bars exist, the bot would 'see' the future, pass in backtest, and breach
+    live. Closed-bar-only resampling + rolling/shift make that impossible.
+    """
+    df = make_1m(n_bars=4000, seed=22)
+    full = build_market_matrix(df).matrix
+    for i in (1500, 2731, 3990):
+        trunc = build_market_matrix(df.iloc[: i + 1]).matrix
+        assert np.allclose(full[i], trunc[-1], atol=1e-5), f"lookahead at row {i}"
+
+
+def test_time_features_are_cyclical(make_1m):
+    mm = build_market_matrix(make_1m(n_bars=300, seed=23))
+    s = mm.matrix[:, MARKET_NAMES.index("time_sin_hour")]
+    c = mm.matrix[:, MARKET_NAMES.index("time_cos_hour")]
+    assert np.allclose(s ** 2 + c ** 2, 1.0, atol=1e-4)
+
+
+def test_assemble_state_full_width_and_block_validation(make_1m):
+    mm = build_market_matrix(make_1m(n_bars=500, seed=24))
+    state = assemble_state(mm.matrix[400])                 # law/trade/acct zero-filled
+    assert state.shape == (STATE_DIM,) and state.dtype == np.float32
+    with pytest.raises(ValueError):                        # wrong block size fails loud
+        assemble_state(mm.matrix[400], law_flags=np.zeros(3))  # law block must be 12
+
+
+def test_valid_from_after_warmup(make_1m):
+    """With enough bars the non-4H features warm up, so valid_from < T (env has bars)."""
+    df = make_1m(n_bars=8000, seed=25)
+    mm = build_market_matrix(df)
+    assert 0 <= mm.valid_from < len(df)
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -240,3 +326,12 @@ if __name__ == "__main__":  # pragma: no cover
 #   C: A single green command now proves the training substrate is faithful and
 #      cheap, so we can afford the seeds/windows that establish a reproducible pass
 #      rate — and the LLM can rule the substrate out first when triangulating.
+# [2026-06-13] Added Section D - feature builder + state vector (M2).
+#   I: The ~145-scalar observation needed proof it is complete (146), bounded,
+#      signal-bearing, and lookahead-free before any policy trains on it.
+#   R: STATE_VECTOR.md schema (146) + lookahead-safety + bounded-encoding design.
+#   A: Added Section D - schema/block-width pins, config==schema, finite+clipped
+#      matrix, signal-variance, truncated-vs-full no-lookahead, cyclical time,
+#      assemble_state width+validation, valid_from warmup. 8 tests (23 total green).
+#   C: The bot's world is now provably faithful and leak-free, so a learned edge is
+#      real and transfers live - the precondition for repeatable FTMO passing.

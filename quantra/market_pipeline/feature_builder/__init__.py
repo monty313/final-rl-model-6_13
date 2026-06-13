@@ -11,6 +11,22 @@ A complete, normalized observation lets the MLP tell breach-risk from safe tradi
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M2] Export the FeatureBuilder + schema API. Connects schema.py
+# (canonical 146-dim layout), indicators.py (locked params), builder.py (offline
+# precompute + assemble_state). Consumed by the env (M4) and telemetry (M9).
+from .schema import SCHEMA, STATE_DIM, MARKET_NAMES, MARKET_DIM, build_schema
+from .builder import (
+    MarketMatrix,
+    assemble_state,
+    build_market_matrix,
+    precompute_symbol,
+)
+
+__all__ = [
+    "SCHEMA", "STATE_DIM", "MARKET_NAMES", "MARKET_DIM", "build_schema",
+    "MarketMatrix", "assemble_state", "build_market_matrix", "precompute_symbol",
+]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

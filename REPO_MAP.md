@@ -41,9 +41,10 @@ docs/
 ## Build status (milestones, SOW §13–14)
 - [x] **M0** — repo skeleton, docs in-tree, runtime hardware optimizer, Colab notebook
 - [x] **M1** — data pipeline (MT5 loader + lookahead-safe resampler)
-- [ ] M2 features · M3 LawMask · M4 Env+Risk+Cost · M5 PPOAgent · M6 RewardEngine ·
-  M7 curriculum+episode · M8 trainer · M9 telemetry · M10 interpreter · M11 risk doctor ·
-  M12 validation · M13 HPO · M14 live bridge · M15 acceptance
+- [x] **M2** — FeatureBuilder + canonical 146-scalar state vector (offline precompute + memmap)
+- [ ] M3 LawMask · M4 Env+Risk+Cost · M5 PPOAgent · M6 RewardEngine · M7 curriculum+episode ·
+  M8 trainer · M9 telemetry · M10 interpreter · M11 risk doctor · M12 validation · M13 HPO ·
+  M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future
 tests append there. **Every file carries an IRAC update log** — see
@@ -61,3 +62,8 @@ makes the bot pass FTMO more consistently. Rule: [quantra/constitution/update_ru
   - **R:** Operator IRAC rule (2026-06-13).
   - **A:** Marked M0+M1 complete; noted the single master suite and the IRAC update-log rule.
   - **C:** An accurate map makes future milestones land in the right place, all aligned to passing.
+- **[2026-06-13]** M2 complete — FeatureBuilder + 146-scalar state vector.
+  - **I:** The map needed to reflect M2 (perception layer) done.
+  - **R:** SOW §13 implementation order; STATE_VECTOR.md schema.
+  - **A:** Marked M2 complete; the canonical schema lives in `quantra/market_pipeline/feature_builder/schema.py`.
+  - **C:** Contributors and the LLM can see the observation layer is locked + verified, so M3 (laws) builds on a faithful, asserted world — keeping the path to consistent passing on track.
