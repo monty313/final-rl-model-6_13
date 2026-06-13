@@ -10,3 +10,15 @@ The laws read multi-timeframe structure; lookahead there would teach the bot a f
 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
+
+# [C - 2026-06-13, M1] Export the resampler API. Connects to resampler.py;
+# consumed by the feature builder (M2) which as-of-merges higher TFs onto the 1m
+# clock. Why: lookahead-safe multi-TF alignment must be a single shared utility.
+from .resampler import (
+    TIMEFRAMES,
+    as_of_higher_tf,
+    build_all_timeframes,
+    resample_ohlcv,
+)
+
+__all__ = ["TIMEFRAMES", "as_of_higher_tf", "build_all_timeframes", "resample_ohlcv"]

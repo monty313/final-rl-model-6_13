@@ -10,3 +10,16 @@ Faithful, lookahead-free bars with real per-bar spread feed both the Spread Filt
 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
+
+# [C - 2026-06-13, M1] Export the loader API for short, stable import paths
+# (`from quantra.market_pipeline.data_loader import load_symbol`). Connects to
+# loader.py; consumed by the env/feature precompute (M2/M4).
+from .loader import (
+    OHLCV_COLUMNS,
+    LoadReport,
+    load_all,
+    load_symbol,
+    parse_mt5_csv,
+)
+
+__all__ = ["OHLCV_COLUMNS", "LoadReport", "load_all", "load_symbol", "parse_mt5_csv"]
