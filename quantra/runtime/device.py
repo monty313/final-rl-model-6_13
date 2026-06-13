@@ -102,3 +102,18 @@ class RepresentativePolicy(nn.Module):
 def resolve_device(kind: str) -> torch.device:
     """Map a DeviceInfo.kind to a concrete ``torch.device``."""
     return torch.device("cuda:0" if kind == "cuda" else kind)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Representative net locked to the four-head 3x256 shape.
+#   I: The device race could mis-time the policy if its benchmark net didn't match the locked architecture.
+#   R: PPO_ENGINE four-head (direction/Beta-size/pointer/value) 3x256 lock + the cost mandate.
+#   A: Mirrored the locked heads in RepresentativePolicy; the shape is pinned by the master suite.
+#   C: An honest race picks the genuinely faster device, so training time/cost isn't wasted -> more validated seeds.

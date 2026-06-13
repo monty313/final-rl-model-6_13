@@ -268,3 +268,18 @@ def load_all(symbols: Optional[List[str]] = None) -> Dict[str, pd.DataFrame]:
     """Load every configured symbol. Used by the env/feature precompute (M2/M4)."""
     symbols = symbols or cfg.SYMBOLS
     return {s: load_symbol(s)[0] for s in symbols}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Format-tolerant, lookahead-free MT5 parse + cache.
+#   I: MT5 exports vary; a wrong parse (dup stamps, NaN cols, index-misalignment) corrupts the bot's world.
+#   R: Faithful, lookahead-free bars; real <SPREAD> feeds the Spread Filter law + the cost layer.
+#   A: Delimiter/column sniff, unique-column guard, positional datetime attach, dedupe, Parquet cache; Section B tests.
+#   C: The FTMO situation the bot trains on is faithful, so a learned pass-behaviour is real and transfers live.

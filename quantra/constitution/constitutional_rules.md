@@ -23,3 +23,16 @@
 don't apply them. Locked set includes: γ=0.997, λ=0.97; 3×256 trunk; four-head
 architecture; 5 slots/symbol; Beta size head; two-phase episode rule; the 12
 laws/gates and their indicator parameters; the walk-forward protocol (12/2/1/7).
+
+
+---
+
+## Update Log (IRAC) — standing rule since 2026-06-13
+*Every change appends a dated IRAC entry; the **Conclusion** always states why it
+makes the bot pass FTMO more consistently. Rule: [update_rules.md](update_rules.md).*
+
+- **[2026-06-13]** C1-C9 cross-referenced to the new standing rules.
+  - **I:** The constitutional rules needed the IRAC + master-suite rules linked for auditability.
+  - **R:** Operator IRAC rule (2026-06-13).
+  - **A:** Added this update log pointing to update_rules.md.
+  - **C:** The invariants stay enforced and auditable, which is what protects a months-long pass streak.

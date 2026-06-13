@@ -86,3 +86,18 @@ def write_mt5_csv(tmp_path):
         return out
 
     return _write
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Deterministic offline fixtures for the whole suite.
+#   I: Tests must be fast and offline yet match the real bar shapes the pipeline produces.
+#   R: Trustworthy fixtures underpin every FTMO-relative guard in the master suite.
+#   A: Deterministic synthetic 1m OHLCV+spread generator + MT5-CSV writer fixtures, reused by all milestones.
+#   C: Reliable fixtures keep the suite green, which is how the bot's substrate stays correct as milestones land.

@@ -126,3 +126,18 @@ class UtilizationMonitor:
 
     def __exit__(self, *exc) -> None:
         self.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Prove the 80% target is met.
+#   I: 'Optimise for 80% usage' is not credible unless it is measured.
+#   R: Infrastructure health metric; explicitly OUTSIDE the 8-failure taxonomy.
+#   A: Background CPU/GPU sampler with graceful degradation (psutil/pynvml optional); reported at launch.
+#   C: Confirmed-efficient runs mean validation completes on time/budget; low GPU% explains cost, never a breach.

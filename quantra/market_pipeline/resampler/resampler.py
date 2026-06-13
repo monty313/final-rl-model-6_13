@@ -96,3 +96,18 @@ def as_of_higher_tf(
         direction="backward",
     ).set_index("time")
     return merged
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Completed-bar-only higher TFs (no lookahead).
+#   I: Peeking at an unfinished 5m/30m/4H bar teaches a fantasy edge that vanishes live and breaches.
+#   R: Completed-bar-only: close-time stamping + backward merge_asof; 4H is observation-only.
+#   A: resample closed='left'/label='right'; as_of_higher_tf backward merge; no-lookahead test in Section C.
+#   C: Training structure == live structure, so the edge transfers and the bot keeps passing across windows.

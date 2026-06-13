@@ -109,3 +109,18 @@ def race_devices(
     """
     devices = devices or available_devices()
     return [_bench_one(d, state_dim, batch, seconds) for d in devices]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Measure CPU-vs-GPU instead of assuming.
+#   I: Assuming a GPU is faster wastes paid hours on a ~145-input 3x256 MLP.
+#   R: Operator cost mandate; measure-don't-assume; infra fact, never a learning signal.
+#   A: Time env-steps/sec per device over a fixed budget; a failing GPU degrades to 0, never crashes launch.
+#   C: Cheap, fast iteration -> more walk-forward windows validated per dollar -> a trustworthy pass rate.

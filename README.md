@@ -73,11 +73,30 @@ map to importable packages under `quantra/` (digit-prefixed names aren't valid P
 identifiers).
 
 ## Build status
-**M0 complete** (this commit): skeleton, docs in-tree, runtime hardware optimizer,
-Colab notebook. Then M1→M15 per `docs/SOW_2_BUILD_SPEC.md` Section 13.
+**M0 + M1 complete**: skeleton, docs in-tree, runtime hardware optimizer, Colab
+notebook (M0); MT5 data loader + lookahead-safe resampler (M1). Then M2→M15 per
+`docs/SOW_2_BUILD_SPEC.md` Section 13.
+
+**Tests:** one master suite — `tests/test_ftmo_master_suite.py` (just run `pytest`).
+All future tests append there. **Every file carries an IRAC update log** (Issue ·
+Rule · Application · Conclusion-why-it-helps-pass-FTMO); see
+[`quantra/constitution/update_rules.md`](quantra/constitution/update_rules.md).
 
 ## ⚠️ Disclaimer
 Trading is risky. This is research software for passing simulated prop-firm
 challenges; it is not financial advice. Live deployment places real orders only when
 *you* run the live bridge, and always behind the manual-halt and breach-auto-flat
 kill switches.
+
+
+---
+
+## Update Log (IRAC) — standing rule since 2026-06-13
+*Every change appends a dated IRAC entry; the **Conclusion** always states why it
+makes the bot pass FTMO more consistently. Rule: [quantra/constitution/update_rules.md](quantra/constitution/update_rules.md).*
+
+- **[2026-06-13]** Front door updated for M0/M1 + the new standing rules.
+  - **I:** The README had no change-history and didn't surface the IRAC + master-suite rules.
+  - **R:** Operator IRAC rule (2026-06-13) + SOW R2-R4.
+  - **A:** Documented M0/M1 status, the hardware optimizer, and pointed to the standing rules.
+  - **C:** A current, honest front door keeps contributors aligned to repeated FTMO passing and prevents drift.

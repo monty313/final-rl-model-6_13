@@ -31,3 +31,16 @@ The bot passes FTMO-style challenges repeatedly across walk-forward windows on
 
 Every module references `docs/MLP_INTERPRETABILITY_LAYER.md` — the binding rulebook
 for the LLM Risk Doctor and the interpretability layer.
+
+
+---
+
+## Update Log (IRAC) — standing rule since 2026-06-13
+*Every change appends a dated IRAC entry; the **Conclusion** always states why it
+makes the bot pass FTMO more consistently. Rule: [update_rules.md](update_rules.md).*
+
+- **[2026-06-13]** Mission doc anchored under the IRAC rule.
+  - **I:** The mission statement had no change-history anchor.
+  - **R:** Operator IRAC rule (2026-06-13).
+  - **A:** Added this update log.
+  - **C:** A stable, logged mission keeps every module anchored to passing FTMO, not chasing PnL.

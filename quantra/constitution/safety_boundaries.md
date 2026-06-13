@@ -38,3 +38,16 @@ stops. It does NOT invent a 9th category.
 This codebase plans and sizes trades and can place them via the live bridge only
 when the operator explicitly runs the live runner. No automated process here moves
 money without that explicit operator action plus the kill switches above.
+
+
+---
+
+## Update Log (IRAC) — standing rule since 2026-06-13
+*Every change appends a dated IRAC entry; the **Conclusion** always states why it
+makes the bot pass FTMO more consistently. Rule: [update_rules.md](update_rules.md).*
+
+- **[2026-06-13]** Safety boundaries given a change-history.
+  - **I:** The safety doc (read-only LLM, kill switches) had no logged change-history.
+  - **R:** Operator IRAC rule (2026-06-13) + SOW C7/R5.
+  - **A:** Added this update log.
+  - **C:** A logged safety boundary keeps the read-only-LLM and kill-switch guarantees auditable, protecting funded accounts across challenges.

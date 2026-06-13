@@ -102,3 +102,18 @@ def apply_thread_limits(plan: ScalePlan) -> None:
     torch.set_num_threads(plan.torch_threads)
     os.environ.setdefault("OMP_NUM_THREADS", str(plan.torch_threads))
     os.environ.setdefault("MKL_NUM_THREADS", str(plan.torch_threads))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Size parallelism to ~80% with headroom.
+#   I: Fully pinning the device slows/kills the Colab kernel and wastes the spend on a half-finished window.
+#   R: ~80% utilisation target with reserved cores; rollout/minibatch math stays in the trainer, not here.
+#   A: Env/thread counts sized to 80% of cores minus reserve; thread limits pinned; covered by Section A tests.
+#   C: Runs finish (windows complete) without thrash, so the pass-rate scoreboard actually receives its data.

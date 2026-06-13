@@ -175,3 +175,18 @@ def in_colab() -> bool:
     the utilisation monitor's logging cadence.
     """
     return "google.colab" in os.sys.modules or os.environ.get("COLAB_RELEASE_TAG") is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Runtime config documented + pinned by the master suite.
+#   I: FTMO target/loss defaults, Drive file IDs and paths had no change-log or test pin.
+#   R: SOW-A3 (2.5%/4.0% configurable, never hardcoded strategy) + the new IRAC rule.
+#   A: Annotated every constant for its FTMO role; defaults now asserted in the master suite (Section A).
+#   C: The bot always trains/judges against the real 2.5%/4% walls, so a 'pass' is reproducible and meaningful.

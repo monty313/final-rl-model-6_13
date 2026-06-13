@@ -141,3 +141,18 @@ def print_report(p: HardwarePlan) -> None:
     print(f"Scale    : {p.scale.rationale}")
     print(f"Envs     : {p.n_envs} parallel worlds | torch threads: {p.scale.torch_threads}")
     print("=" * 68)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] One call: race -> prefer-CPU -> scale -> report.
+#   I: Choosing a device blindly either wastes GPU money or starves throughput.
+#   R: Prefer CPU unless a GPU is >=1.30x faster; ~80% autoscale; infra is outside the learning causal chain.
+#   A: race_devices -> _pick_device policy -> autoscale -> thread pin -> print_report.
+#   C: The cheapest fast substrate -> more seeds/windows -> a more trustworthy FTMO pass rate.

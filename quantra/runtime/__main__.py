@@ -48,3 +48,18 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13.
+# Every change to this file APPENDS a dated IRAC entry below (newest last):
+#   I (Issue) / R (Rule) / A (Application) / C (Conclusion -> why this makes the
+#   bot pass FTMO MORE CONSISTENTLY, with no bug or inefficiency). The LLM Risk
+#   Doctor reads this log to reconstruct the chronological 'why' when
+#   triangulating a pass-rate regression. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] Instant cost/speed read for the operator.
+#   I: The operator needs an honest read on cost/speed BEFORE committing paid GPU hours.
+#   R: Infrastructure entry point; never touches learning.
+#   A: `python -m quantra.runtime` prints the plan + measured utilisation; ASCII-safe console output.
+#   C: Prevents wasted GPU spend so budget goes to the validation that establishes the pass rate.
