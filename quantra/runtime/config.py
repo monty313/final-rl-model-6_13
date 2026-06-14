@@ -96,6 +96,16 @@ DRIVE_FOLDER_NAME: str = "rl-trading-data"
 DRIVE_FOLDER_ID: str = "1azEnCfwQjxPkBemmv9mxY3GyVAMcjF-3"
 
 
+# ---------------------------------------------------------------------------
+# Observation toggle [operator override, 2026-06-13]. When True the state vector
+# includes the RAW SMA + RAW CCI block (`market_raw`), departing from the
+# no-raw-price encoding rule. The M5 agent MUST standardize these (see
+# feature_builder/RAW_INPUTS.md). Flip to False to ablate raw-vs-normalized; the
+# schema + STATE_DIM follow automatically. Read by feature_builder.schema.
+# ---------------------------------------------------------------------------
+INCLUDE_RAW_INPUTS: bool = True
+
+
 @dataclass(frozen=True)
 class ChallengeConfig:
     """Runtime FTMO inputs (SOW §1.4, §2.6, §2.7). Defaults per SOW-A3.
@@ -146,10 +156,10 @@ class RuntimeConfig:
     seed: int = 0
 
     # Nominal state-vector width for the *startup* benchmark only. Mirrors
-    # quantra.market_pipeline.feature_builder.schema.STATE_DIM (146) without
-    # importing it (avoids an import cycle); the master suite asserts they match.
-    # We never let this nominal value leak into training shapes.
-    nominal_state_dim: int = 146
+    # quantra.market_pipeline.feature_builder.schema.STATE_DIM (176 with raw inputs
+    # on; 146 off) without importing it (avoids an import cycle); the master suite
+    # asserts they match. We never let this nominal value leak into training shapes.
+    nominal_state_dim: int = field(default_factory=lambda: 176 if INCLUDE_RAW_INPUTS else 146)
 
     def to_dict(self) -> dict:
         """Flatten for telemetry's run-config block (M9 data contract)."""

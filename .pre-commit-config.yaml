@@ -1,0 +1,35 @@
+# Quantra pre-commit hooks — the change-impact tracker's enforcement layer.
+# Install once:  pip install pre-commit && pre-commit install
+#
+# Why (relative to passing FTMO): these hooks make it impossible to silently change
+# the policy's observation/feature pipeline. The snapshot guard HARD-FAILS the commit
+# if the state vector drifted without a re-snapshot; the impact report PRINTS the
+# blast radius + FTMO-framed follow-ups so dependent code/tests/normalization get
+# updated together. Keeping the bot's world and its code in sync is what protects a
+# months-long pass streak.
+repos:
+  - repo: local
+    hooks:
+      # Tier 1 — HARD GATE: state-vector snapshot must match (or re-snapshot).
+      - id: quantra-state-vector-snapshot
+        name: state-vector snapshot guard
+        entry: python tools/snapshot.py --check
+        language: system
+        pass_filenames: false
+        files: '^(quantra/market_pipeline/feature_builder/|quantra/runtime/config\.py)'
+
+      # Tier 2 — INFORMATIONAL: print the change-impact report for staged files.
+      - id: quantra-change-impact
+        name: change-impact report (advisory)
+        entry: python tools/impact.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+
+      # Guard the single master suite stays green on the fast (offline) tests.
+      - id: quantra-master-suite-fast
+        name: master suite (runtime + tracker)
+        entry: python -m pytest tests/test_ftmo_master_suite.py -q -k "snapshot or impact or schema or config"
+        language: system
+        pass_filenames: false

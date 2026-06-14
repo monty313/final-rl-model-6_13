@@ -41,7 +41,11 @@ docs/
 ## Build status (milestones, SOW §13–14)
 - [x] **M0** — repo skeleton, docs in-tree, runtime hardware optimizer, Colab notebook
 - [x] **M1** — data pipeline (MT5 loader + lookahead-safe resampler)
-- [x] **M2** — FeatureBuilder + canonical 146-scalar state vector (offline precompute + memmap)
+- [x] **M2** — FeatureBuilder + canonical state vector (offline precompute + memmap).
+  **176 scalars** = 146 normalized + a 30-feature operator-added RAW SMA/CCI block
+  (`market_raw`, toggle `config.INCLUDE_RAW_INPUTS`; risks/safeguards in
+  [`feature_builder/RAW_INPUTS.md`](quantra/market_pipeline/feature_builder/RAW_INPUTS.md))
+- [x] **Change-impact tracker** — snapshot guard + AST analyzer ([`CHANGE_IMPACT.md`](CHANGE_IMPACT.md))
 - [ ] M3 LawMask · M4 Env+Risk+Cost · M5 PPOAgent · M6 RewardEngine · M7 curriculum+episode ·
   M8 trainer · M9 telemetry · M10 interpreter · M11 risk doctor · M12 validation · M13 HPO ·
   M14 live bridge · M15 acceptance
@@ -67,3 +71,8 @@ makes the bot pass FTMO more consistently. Rule: [quantra/constitution/update_ru
   - **R:** SOW §13 implementation order; STATE_VECTOR.md schema.
   - **A:** Marked M2 complete; the canonical schema lives in `quantra/market_pipeline/feature_builder/schema.py`.
   - **C:** Contributors and the LLM can see the observation layer is locked + verified, so M3 (laws) builds on a faithful, asserted world — keeping the path to consistent passing on track.
+- **[2026-06-13]** Operator raw-input block (state vector 146→176) + change-impact tracker.
+  - **I:** Operator wants raw SMA/CCI added; and a guard so future obs changes can't silently degrade pass-rate.
+  - **R:** Operator directives; raw block overrides the no-raw-price rule (RAW_INPUTS.md); tracker per CHANGE_IMPACT.md.
+  - **A:** Added `market_raw` (30, unclipped, flagged, toggleable); built snapshot guard + AST analyzer + pre-commit; 28 master-suite tests green.
+  - **C:** The policy gains the requested signal with a clean off-ramp, and the observation can't change by accident — both protect consistent passing.

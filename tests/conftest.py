@@ -14,11 +14,18 @@ the bot trains against are faithful. Rulebook: ``docs/MLP_INTERPRETABILITY_LAYER
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+
+# Put the repo root on sys.path so tests can import the dev-tools package
+# (`from tools import snapshot`) for the change-impact tracker tests.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 def _make_1m(symbol: str = "EURUSD", n_bars: int = 5000, seed: int = 0,

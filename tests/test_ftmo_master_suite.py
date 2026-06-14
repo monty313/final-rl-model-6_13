@@ -45,14 +45,17 @@ import pytest
 import quantra.runtime.config as cfg
 from quantra.market_pipeline.data_loader import OHLCV_COLUMNS, load_symbol, parse_mt5_csv
 from quantra.market_pipeline.feature_builder import (
+    EXPECTED_WIDTHS,
     MARKET_DIM,
     MARKET_NAMES,
+    PRECOMPUTED_DIM,
+    PRECOMPUTED_NAMES,
+    RAW_FEATURE_NAMES,
     SCHEMA,
     STATE_DIM,
     assemble_state,
     build_market_matrix,
 )
-from quantra.market_pipeline.feature_builder.schema import EXPECTED_WIDTHS
 from quantra.market_pipeline.resampler import (
     as_of_higher_tf,
     build_all_timeframes,
@@ -62,6 +65,7 @@ from quantra.runtime import HardwareConfig, RuntimeConfig, plan
 from quantra.runtime.autoscale import plan_cpu_scale
 from quantra.runtime.device import RepresentativePolicy, available_devices
 from quantra.runtime.throughput_benchmark import race_devices
+from tools import impact, snapshot  # change-impact tracker (repo root on sys.path via conftest)
 
 
 # =============================================================================
@@ -234,11 +238,13 @@ def test_as_of_merge_has_no_lookahead(make_1m):
 # tell breach-risk from safe trading (Term 1). Drift, leakage, or NaN here is a top
 # root cause of inconsistent passing — these guards make all three impossible.
 # =============================================================================
-def test_schema_total_is_146_and_blocks_match():
-    assert STATE_DIM == 146
+def test_schema_total_is_176_with_raw_block():
+    # 146 normalized-only + 30 raw (operator override) = 176
+    assert STATE_DIM == 176
     for name, width in EXPECTED_WIDTHS.items():
         s, e = SCHEMA.block_spans[name]
         assert e - s == width, f"block {name} width drifted"
+    assert EXPECTED_WIDTHS["market_raw"] == 30
     assert len(SCHEMA.feature_names) == STATE_DIM
     assert len(set(SCHEMA.feature_names)) == STATE_DIM  # names unique
 
@@ -250,14 +256,31 @@ def test_config_nominal_state_dim_matches_schema():
     assert RuntimeConfig().nominal_state_dim == STATE_DIM
 
 
-def test_market_matrix_shape_finite_and_clipped(make_1m):
+def test_precomputed_matrix_shape_finite_and_normalized_clipped(make_1m):
     df = make_1m(n_bars=4000, seed=20)
     mm = build_market_matrix(df)
-    assert mm.matrix.shape == (4000, MARKET_DIM)          # (T, 89)
+    assert mm.matrix.shape == (4000, PRECOMPUTED_DIM)     # (T, 119) = market 89 + raw 30
     assert mm.matrix.dtype == np.float32
     assert np.isfinite(mm.matrix).all()                   # no NaN/inf reaches the policy
-    assert np.abs(mm.matrix).max() <= 10.0 + 1e-4         # clipped -> stable MLP
-    assert mm.names == MARKET_NAMES                        # telemetry block labels intact
+    # ONLY the normalized columns are clipped to ±10; raw levels are exempt.
+    norm_idx = [i for i, n in enumerate(PRECOMPUTED_NAMES) if n not in RAW_FEATURE_NAMES]
+    assert np.abs(mm.matrix[:, norm_idx]).max() <= 10.0 + 1e-4
+    assert mm.names == PRECOMPUTED_NAMES                   # telemetry block labels intact
+
+
+def test_raw_block_present_finite_and_unclipped(make_1m):
+    """Raw SMA/CCI block exists (30), is finite, and is NOT squashed to ±10.
+
+    FTMO link: the operator wants un-transformed levels; clipping would destroy
+    them. They're flagged (RAW_FEATURE_NAMES) so the M5 agent standardizes them and
+    the LLM can attribute any instability to the raw block specifically.
+    """
+    mm = build_market_matrix(make_1m(n_bars=4000, seed=26))
+    raw_idx = [i for i, n in enumerate(PRECOMPUTED_NAMES) if n in RAW_FEATURE_NAMES]
+    assert len(raw_idx) == 30
+    assert np.isfinite(mm.matrix[:, raw_idx]).all()
+    cci_cols = [i for i, n in enumerate(PRECOMPUTED_NAMES) if n.startswith("raw_cci")]
+    assert np.abs(mm.matrix[1000:, cci_cols]).max() > 10.0  # proves no clip on raw
 
 
 def test_market_features_carry_signal(make_1m):
@@ -293,8 +316,11 @@ def test_assemble_state_full_width_and_block_validation(make_1m):
     mm = build_market_matrix(make_1m(n_bars=500, seed=24))
     state = assemble_state(mm.matrix[400])                 # law/trade/acct zero-filled
     assert state.shape == (STATE_DIM,) and state.dtype == np.float32
+    assert mm.matrix.shape[1] == PRECOMPUTED_DIM           # row width feeds assemble
     with pytest.raises(ValueError):                        # wrong block size fails loud
-        assemble_state(mm.matrix[400], law_flags=np.zeros(3))  # law block must be 12
+        assemble_state(mm.matrix[400], law_flags=np.zeros(3))   # law block must be 12
+    with pytest.raises(ValueError):                        # wrong precomputed width
+        assemble_state(mm.matrix[400][:50])
 
 
 def test_valid_from_after_warmup(make_1m):
@@ -302,6 +328,50 @@ def test_valid_from_after_warmup(make_1m):
     df = make_1m(n_bars=8000, seed=25)
     mm = build_market_matrix(df)
     assert 0 <= mm.valid_from < len(df)
+
+
+# =============================================================================
+# SECTION E — CHANGE-IMPACT TRACKER (observation/pipeline drift guard)
+# FTMO link: the observation is the policy's whole world. A silent change to it
+# invalidates normalization, the agent input dim, telemetry, and checkpoints — any
+# of which can quietly wreck pass-rate. These guards make such a change impossible
+# to do accidentally and give the LLM an FTMO-framed map of the blast radius.
+# =============================================================================
+def test_state_vector_snapshot_matches():
+    """The live schema must match the committed snapshot, or fail with a checklist."""
+    deltas = snapshot.diff(snapshot.load(), snapshot.build())
+    msg = (
+        "STATE-VECTOR DRIFT:\n  " + "\n  ".join(deltas)
+        + "\n\nFollow-ups (relative to passing FTMO):\n  "
+        + "\n  ".join(snapshot.checklist(deltas))
+        + "\n\nIf this change is intended: `python tools/snapshot.py --update`"
+    )
+    assert not deltas, msg
+
+
+def test_snapshot_carries_llm_interpretation():
+    """The snapshot must stay LLM-readable + FTMO-framed (operator requirement)."""
+    snap = snapshot.load()
+    assert snap["state_dim"] == STATE_DIM
+    interp = snap["_llm_interpretation"]
+    assert "market_raw" in interp["blocks"] and "account" in interp["blocks"]
+    assert interp["drift_means"]  # concrete follow-ups present
+
+
+def test_impact_graph_traces_schema_dependents():
+    """The AST graph must resolve relative imports and find schema's dependents."""
+    graph = impact.build_graph()
+    schema_mod = impact._module_name(
+        impact.REPO_ROOT / "quantra" / "market_pipeline" / "feature_builder" / "schema.py"
+    )
+    affected = impact.reverse_closure({schema_mod}, graph)
+    assert any(m.endswith("builder") for m in affected), "schema dependents not traced"
+
+
+def test_impact_report_is_ftmo_framed():
+    rpt = impact.report(["quantra/market_pipeline/feature_builder/schema.py"])
+    assert "passing FTMO" in rpt
+    assert "snapshot.py --check" in rpt  # actionable follow-up present
 
 
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
@@ -335,3 +405,11 @@ if __name__ == "__main__":  # pragma: no cover
 #      assemble_state width+validation, valid_from warmup. 8 tests (23 total green).
 #   C: The bot's world is now provably faithful and leak-free, so a learned edge is
 #      real and transfers live - the precondition for repeatable FTMO passing.
+# [2026-06-13] Added Section E - change-impact tracker + raw-input block tests.
+#   I: An operator-added raw SMA/CCI block changed the observation (146->176); the
+#      obs could later drift again undetected and silently degrade pass-rate.
+#   R: Operator directives (raw inputs + a change-impact tracking system, LLM-readable).
+#   A: Updated Section D to 176/raw-block coverage; added Section E - snapshot-match,
+#      LLM-interpretation, AST dependency-graph, and FTMO-framed-report tests.
+#   C: The observation is now both faithful AND change-guarded, so any future obs
+#      change is caught with a concrete follow-up list before it can hurt passing.

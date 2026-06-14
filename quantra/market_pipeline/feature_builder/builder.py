@@ -6,8 +6,10 @@ Turns clean 1m bars into the policy's observation:
   1. resample to 5m/30m/4H (lookahead-safe, M1),
   2. compute the locked indicators per timeframe (indicators.py),
   3. as-of merge higher-TF features onto the 1m clock (closed bars only),
-  4. assemble the 89-scalar MARKET+TIME block in canonical schema order,
-  5. clean (inf/NaN -> 0) and clip to a bounded range for a stable MLP,
+  4. assemble the precomputed block in canonical schema order (normalized `market`
+     89 + RAW `market_raw` 30 = 119 with raw inputs on),
+  5. clean (inf/NaN -> 0); clip ONLY the normalized block (RAW levels pass through
+     for the M5 agent to standardize),
   6. cache the result to a float32 memmap so the RL loop never recomputes it.
 
 The action-DEPENDENT blocks (law flags, per-slot trade ×5, portfolio, account) are
@@ -44,8 +46,20 @@ from quantra.runtime import config as cfg
 from quantra.market_pipeline.data_loader import load_symbol
 from quantra.market_pipeline.resampler import build_all_timeframes
 
+from quantra.runtime.config import INCLUDE_RAW_INPUTS
+
 from . import indicators as ind
-from .schema import MARKET_DIM, MARKET_NAMES, SCHEMA, STATE_DIM
+from .schema import (
+    MARKET_DIM,
+    MARKET_NAMES,
+    PRECOMPUTED_DIM,
+    PRECOMPUTED_NAMES,
+    RAW_CCI_TFS,
+    RAW_FEATURE_NAMES,
+    RAW_SMA_TFS,
+    SCHEMA,
+    STATE_DIM,
+)
 
 # Continuous features are clipped to +/- CLIP after normalization. Real ATR-scaled
 # distances / z-scores live well inside this; the clip only kills warmup blow-ups
@@ -92,6 +106,10 @@ def _compute_tf_features(df: pd.DataFrame, tf: str) -> pd.DataFrame:
             dev = (cp - csma) / 100.0
             out[f"cci{p}_dev_{tf}"] = dev
             cci_dev[p] = dev
+            if INCLUDE_RAW_INPUTS and tf in RAW_CCI_TFS:
+                # RAW CCI level (operator override) — UNNORMALIZED (~[-300, 300]),
+                # added ALONGSIDE the normalized cci_norm/cci_dev above.
+                out[f"raw_cci{p}_{tf}"] = cp
         all_pos = (cci_dev[10] > 0) & (cci_dev[30] > 0) & (cci_dev[100] > 0)
         all_neg = (cci_dev[10] < 0) & (cci_dev[30] < 0) & (cci_dev[100] < 0)
         out[f"cci_sync_{tf}"] = _flag_three_way(all_pos, all_neg)
@@ -142,6 +160,19 @@ def _compute_tf_features(df: pd.DataFrame, tf: str) -> pd.DataFrame:
         out["time_cos_hour"] = pd.Series(np.cos(2 * np.pi * hour / 24.0), index=idx)
         out["time_dow"] = pd.Series((idx.dayofweek / 4.0) * 2.0 - 1.0, index=idx)
 
+    # --- RAW SMA inputs (operator override, 2026-06-13): UNNORMALIZED price-level
+    # SMAs on 5m/30m/4H. SMA period 1 = price, so shifts 0-3 give a 4-tap price
+    # ladder; sma30/sma50 are medium trend levels. These bypass the ±CLIP downstream
+    # and MUST be standardized by the M5 agent (see RAW_INPUTS.md). Observation-only,
+    # never law ingredients (laws stay on the locked SOW-D4 params). ---
+    if INCLUDE_RAW_INPUTS and tf in RAW_SMA_TFS:
+        out[f"raw_sma1_sh0_{tf}"] = c
+        out[f"raw_sma1_sh1_{tf}"] = c.shift(1)
+        out[f"raw_sma1_sh2_{tf}"] = c.shift(2)
+        out[f"raw_sma1_sh3_{tf}"] = c.shift(3)
+        out[f"raw_sma30_{tf}"] = c.rolling(30, min_periods=30).mean()
+        out[f"raw_sma50_{tf}"] = c.rolling(50, min_periods=50).mean()
+
     return pd.DataFrame(out, index=df.index)
 
 
@@ -159,17 +190,18 @@ def _asof_onto(base_index: pd.DatetimeIndex, feat: pd.DataFrame) -> pd.DataFrame
 class MarketMatrix:
     """The precomputed market block + provenance for the env / telemetry."""
 
-    matrix: np.ndarray          # (T, 89) float32, schema MARKET order
+    matrix: np.ndarray          # (T, PRECOMPUTED_DIM) float32, precomputed-block order
     index: pd.DatetimeIndex     # 1m timestamps aligned to rows
-    valid_from: int             # first row with no warmup NaN (env starts here)
-    names: list                 # MARKET_NAMES (for telemetry block labels)
+    valid_from: int             # first row with non-4H normalized features ready
+    names: list                 # PRECOMPUTED_NAMES (market + market_raw) for telemetry
 
 
 def build_market_matrix(df_1m: pd.DataFrame) -> MarketMatrix:
-    """Compute the 89-wide market+time matrix for one symbol from its 1m bars.
+    """Compute the precomputed (action-independent) feature matrix from 1m bars.
 
-    Pure (no IO): used directly by tests and by ``precompute_symbol``. Higher-TF
-    features are as-of merged so row t only sees closed 5m/30m/4H bars.
+    Width = PRECOMPUTED_DIM (normalized `market` 89 + RAW `market_raw` 30 = 119 with
+    raw inputs on). Pure (no IO): used by tests and by ``precompute_symbol``.
+    Higher-TF features are as-of merged so row t only sees closed 5m/30m/4H bars.
     """
     frames = build_all_timeframes(df_1m)  # {1m,5m,30m,4H}
     cols = pd.DataFrame(index=df_1m.index)
@@ -180,28 +212,29 @@ def build_market_matrix(df_1m: pd.DataFrame) -> MarketMatrix:
         feat = _compute_tf_features(frames[tf], tf)
         cols = cols.join(_asof_onto(df_1m.index, feat))
 
-    # Order to the canonical schema; missing columns would be a coding error.
-    missing = [n for n in MARKET_NAMES if n not in cols.columns]
+    # Order to the canonical precomputed-block schema; missing = coding error.
+    missing = [n for n in PRECOMPUTED_NAMES if n not in cols.columns]
     if missing:
         raise RuntimeError(f"FeatureBuilder produced no values for: {missing}")
-    ordered = cols[MARKET_NAMES]
+    ordered = cols[PRECOMPUTED_NAMES]
 
-    # valid_from = first row where all NON-4H market features are ready (warmup end).
-    # 4H is observation-only (4H Observation Rule) and may legitimately stay 0 during
-    # its long BB200 warmup, so we don't make the env wait ~33 days for it — we wait
-    # only for the law-relevant 1m/5m/30m features. This keeps usable training bars
-    # per window high, which matters for getting enough pass/fail samples per seed.
-    non_4h = [n for n in MARKET_NAMES if not n.endswith("_4H")]
-    valid_mask = ordered[non_4h].notna().all(axis=1).to_numpy()
+    # valid_from = first row where all NON-4H NORMALIZED features are ready (warmup
+    # end). 4H is observation-only and may stay 0 during its long BB200 warmup, so we
+    # don't make the env wait ~33 days for it; we wait only for the law-relevant
+    # 1m/5m/30m normalized features. Keeps usable training bars per window high
+    # (more pass/fail samples per seed). RAW features warm fast and aren't gated on.
+    non_4h_norm = [n for n in MARKET_NAMES if not n.endswith("_4H")]
+    valid_mask = ordered[non_4h_norm].notna().all(axis=1).to_numpy()
     valid_from = int(np.argmax(valid_mask)) if valid_mask.any() else len(ordered)
 
-    cleaned = (
-        ordered.replace([np.inf, -np.inf], np.nan)
-        .fillna(0.0)
-        .clip(-CLIP, CLIP)
-        .to_numpy(dtype=np.float32)
-    )
-    return MarketMatrix(cleaned, df_1m.index, valid_from, list(MARKET_NAMES))
+    # Clean: inf->NaN->0 for all; clip ONLY the normalized block. RAW features are
+    # unbounded price/CCI levels and must NOT be clipped (the M5 agent standardizes
+    # them) — clipping raw price to ±10 would destroy it.
+    clean = ordered.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    norm_cols = [n for n in PRECOMPUTED_NAMES if n not in RAW_FEATURE_NAMES]
+    clean[norm_cols] = clean[norm_cols].clip(-CLIP, CLIP)
+    matrix = clean[PRECOMPUTED_NAMES].to_numpy(dtype=np.float32)
+    return MarketMatrix(matrix, df_1m.index, valid_from, list(PRECOMPUTED_NAMES))
 
 
 def precompute_symbol(symbol: str, force: bool = False) -> MarketMatrix:
@@ -218,7 +251,7 @@ def precompute_symbol(symbol: str, force: bool = False) -> MarketMatrix:
         mat = np.load(npy, mmap_mode="r")
         idx = pd.read_parquet(meta).index
         valid_from = int(np.argmax(np.abs(mat).sum(axis=1) > 0)) if len(mat) else 0
-        return MarketMatrix(mat, pd.DatetimeIndex(idx), valid_from, list(MARKET_NAMES))
+        return MarketMatrix(mat, pd.DatetimeIndex(idx), valid_from, list(PRECOMPUTED_NAMES))
 
     df_1m, _ = load_symbol(symbol)
     mm = build_market_matrix(df_1m)
@@ -228,19 +261,24 @@ def precompute_symbol(symbol: str, force: bool = False) -> MarketMatrix:
 
 
 def assemble_state(
-    market_row: np.ndarray,
+    precomputed_row: np.ndarray,
     law_flags: Optional[np.ndarray] = None,
     trade: Optional[np.ndarray] = None,
     portfolio: Optional[np.ndarray] = None,
     account: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Concatenate the 5 blocks into the full 146-vector in canonical schema order.
+    """Concatenate blocks into the full STATE_DIM vector in canonical schema order.
 
-    The env (M4) calls this each step with the live law/trade/portfolio/account
-    sub-vectors; any omitted block is zero-filled (used in M2 tests and warmup).
-    The result width is asserted == STATE_DIM so a block-size drift fails loudly
+    ``precomputed_row`` is one row of build_market_matrix (the market + market_raw
+    blocks, width PRECOMPUTED_DIM). The env (M4) appends the live law/trade/
+    portfolio/account sub-vectors; any omitted block is zero-filled (M2 tests +
+    warmup). Width is asserted == STATE_DIM so a block-size drift fails loudly
     rather than silently feeding the policy a malformed world.
     """
+    pre = np.asarray(precomputed_row, dtype=np.float32).ravel()
+    if pre.shape[0] != PRECOMPUTED_DIM:
+        raise ValueError(f"precomputed_row expected {PRECOMPUTED_DIM} values, got {pre.shape[0]}")
+
     def _blk(name: str, vec: Optional[np.ndarray]) -> np.ndarray:
         width = SCHEMA.block_spans[name][1] - SCHEMA.block_spans[name][0]
         if vec is None:
@@ -251,7 +289,7 @@ def assemble_state(
         return v
 
     state = np.concatenate([
-        _blk("market", np.asarray(market_row, dtype=np.float32).ravel()),
+        pre,                       # market + market_raw (PRECOMPUTED_DIM)
         _blk("law", law_flags),
         _blk("trade", trade),
         _blk("portfolio", portfolio),
@@ -264,7 +302,8 @@ def assemble_state(
 # Convenience re-exports for the env/agent/telemetry.
 __all__ = [
     "MarketMatrix", "build_market_matrix", "precompute_symbol", "assemble_state",
-    "MARKET_NAMES", "MARKET_DIM", "STATE_DIM", "SCHEMA", "CLIP",
+    "PRECOMPUTED_NAMES", "PRECOMPUTED_DIM", "MARKET_NAMES", "MARKET_DIM",
+    "RAW_FEATURE_NAMES", "STATE_DIM", "SCHEMA", "CLIP",
 ]
 
 
@@ -286,3 +325,15 @@ __all__ = [
 #   C: The hot loop is just array indexing + a microsecond MLP on a faithful,
 #      bounded, lookahead-free observation, so we can afford the seeds/windows that
 #      prove a real, transferable FTMO pass rate.
+# [2026-06-13] Operator override — compute the RAW SMA + RAW CCI block.
+#   I: The operator wants raw (unnormalized) SMA + CCI levels added to the obs; raw
+#      price clipped to ±10 would be destroyed, and unbounded inputs can destabilise
+#      the small MLP or invite shortcut learning if fed naively.
+#   R: Operator directive overrides the no-raw-price rule for `market_raw`; raw
+#      features bypass ±CLIP and are flagged (RAW_FEATURE_NAMES) for M5 standardization.
+#   A: Added raw SMA (5m/30m/4H) + raw CCI (CCI TFs); ordered by PRECOMPUTED_NAMES;
+#      clip applied ONLY to normalized columns; assemble_state now takes the 119-wide
+#      precomputed row; valid_from still keys off non-4H NORMALIZED features.
+#   C: The policy gets the requested raw signal without corrupting it, while the raw
+#      block stays isolated + flagged so we can standardize/ablate it — protecting
+#      training stability and the pass rate if raw inputs turn out to hurt.
