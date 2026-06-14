@@ -1050,6 +1050,66 @@ def test_trainer_runs_and_checkpoints():
     assert path.exists()
 
 
+# =============================================================================
+# SECTION L — TELEMETRYLOGGER (versioned data contract, round-trip) (M9)
+# FTMO link: no telemetry -> no diagnosis. A breach/pass-day must be fully
+# reconstructable so the Risk Doctor can find the cause before it costs a challenge.
+# =============================================================================
+from quantra.diagnostics.telemetry_logger import (  # noqa: E402
+    SCHEMA_VERSION,
+    StepPacket,
+    TelemetryLogger,
+)
+
+
+def _demo_packet(ts=0):
+    return StepPacket(
+        run_id="r", seed=0, window_id="w0", episode_id=1, timestep=ts, symbol="EURUSD",
+        timestamp="2021-01-04T00:00:00", bar_index=ts,
+        observation=list(np.random.randn(STATE_DIM)),
+        law_states=[0.0] * 12, enforcement_mode="live", legal_actions=[1, 1, 1, 0],
+        pre_mask_logits=[0.1, 0.2, 0.3, 0.4], post_mask_logits=[0.1, 0.2, -1e9, 0.4],
+        action_probs=[0.4, 0.3, 0.0, 0.3], chosen_action=0, pointer_output=None,
+        raw_size=0.5, feasible_size=0.66, value=0.01,
+        hidden_summary=[0.1, -0.2, 0.3],
+        reward_decomposition={"L0": 0.01, "L1": 0.0, "L3": -0.001},
+        quad_signals={"dd_eff": 1.0}, risk_context={"daily_dd": 0.5, "trailing_dd": 1.2},
+        outcome={"next_bar_return": 0.0003},
+    )
+
+
+def test_telemetry_round_trip_preserves_every_field(tmp_path):
+    log = TelemetryLogger("run_rt", out_dir=tmp_path)
+    p = _demo_packet(3)
+    log.log_step(p)
+    log.log_trade({"trade_id": 1, "pnl": 12.3, "symbol": "EURUSD"})
+    log.log_day({"day": 1, "passed": True, "day_pnl": 250.0})
+    path = log.flush()
+
+    recs = TelemetryLogger.load(path)
+    header = recs[0]
+    assert header["kind"] == "header" and header["schema_version"] == SCHEMA_VERSION
+    assert "blocks" in header and len(header["feature_names"]) == STATE_DIM
+
+    step = next(r for r in recs if r["kind"] == "step")
+    # every contract field survives the round trip
+    for fld in p.to_dict():
+        assert fld in step
+    assert step["chosen_action"] == 0 and step["enforcement_mode"] == "live"
+    assert np.allclose(step["observation"], p.observation, atol=1e-6)
+    assert step["reward_decomposition"]["L0"] == 0.01
+    assert any(r["kind"] == "trade" for r in recs) and any(r["kind"] == "day" for r in recs)
+
+
+def test_telemetry_header_carries_block_names_for_the_llm():
+    """The LLM must be able to map any observation index to its feature block."""
+    log = TelemetryLogger("run_hdr")
+    recs = log._buf
+    blocks = recs[0]["blocks"]
+    assert set(blocks) == {"market", "market_raw", "law", "trade", "portfolio", "account"}
+    assert "law_super_trend_bb" in blocks["law"]
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -1145,3 +1205,10 @@ if __name__ == "__main__":  # pragma: no cover
 #      cooling, G8 multi-TF-agree/flat/>=1.5ATR, trainer-runs-updates-checkpoints. 5 tests.
 #   C: Repeated patient PPO steps under faithful physics + masks produce a brain that
 #      hits target without breaching, and every brain is saved for the promotion gate.
+# [2026-06-13] Added Section L - TelemetryLogger round-trip (M9).
+#   I: The diagnostics layer needed a versioned, complete, reconstructable record.
+#   R: MLP_INTERPRETABILITY_LAYER.md data contract + versioned schema.
+#   A: Section L - full-field round-trip (every contract field survives JSONL),
+#      header carries schema version + grouped block names for the LLM. 2 tests.
+#   C: Any breach/pass-day is fully reconstructable, so the Risk Doctor can diagnose
+#      the cause - the loop that stops the same failure recurring and eroding pass-rate.

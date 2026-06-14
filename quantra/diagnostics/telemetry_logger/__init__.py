@@ -11,6 +11,11 @@ No telemetry -> no interpretability -> no diagnosis (Term 9). Capturing the full
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M9] Export the telemetry API (consumed by interpreter + Risk Doctor).
+from .logger import SCHEMA_VERSION, StepPacket, TelemetryLogger
+
+__all__ = ["TelemetryLogger", "StepPacket", "SCHEMA_VERSION"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

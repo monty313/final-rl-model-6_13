@@ -63,7 +63,9 @@ docs/
   (`quantra/learning_system/curriculum_manager/`, `quantra/ftmo_passing/challenge_state.py`).
 - [x] **M8** — Trainer + GAE (locked γ=0.997/λ=0.97) + aggression scheduler + G8
   missed-opportunity metric + checkpointing (`quantra/learning_system/trainer/`).
-- [ ] M9 telemetry · M10 interpreter · M11 risk doctor · M12 validation ·
+- [x] **M9** — TelemetryLogger (versioned schema, full per-step/-trade/-day data
+  contract, JSONL round-trip) (`quantra/diagnostics/telemetry_logger/`).
+- [ ] M10 interpreter · M11 risk doctor · M12 validation ·
   M13 HPO · M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future
