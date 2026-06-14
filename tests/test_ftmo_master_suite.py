@@ -1268,6 +1268,56 @@ def test_promotion_gate_requires_3_seeds_improvement_no_worse_breach():
     assert not no2 and "breach" in reason2
 
 
+# =============================================================================
+# SECTION P — HPO (Optuna on NON-SACRED dials only) (M13)
+# FTMO link: gamma/lambda + the aggression schedule are the patience that makes the
+# bot pass; the guard makes them un-tunable so HPO can only help, never sabotage.
+# =============================================================================
+from quantra.learning_system.hpo import (  # noqa: E402
+    DEFAULT_SEARCH_SPACE,
+    SACRED_DIALS,
+    run_study,
+    suggest,
+    validate_not_sacred,
+)
+
+
+class _FakeTrial:
+    def suggest_float(self, n, lo, hi):
+        return (lo + hi) / 2.0
+
+    def suggest_categorical(self, n, choices):
+        return choices[0]
+
+    def suggest_int(self, n, lo, hi):
+        return lo
+
+
+def test_hpo_refuses_to_tune_sacred_dials():
+    assert {"gamma", "lambda"} <= SACRED_DIALS
+    with pytest.raises(ValueError):
+        validate_not_sacred(["value_coef", "gamma"])      # gamma is hand-locked
+    with pytest.raises(ValueError):
+        suggest(_FakeTrial(), {"clip_range": (0.2, 0.4)})  # the G2 ranges are locked
+
+
+def test_hpo_suggest_returns_only_non_sacred_params():
+    params = suggest(_FakeTrial())
+    assert set(params) == set(DEFAULT_SEARCH_SPACE)
+    assert not (set(params) & SACRED_DIALS)               # never a sacred dial
+    assert "value_coef" in params and params["minibatch"] in (32, 64, 128)
+
+
+def test_hpo_study_maximizes_pass_rate_objective():
+    """A tiny Optuna study runs over the non-sacred space and improves the objective."""
+    def objective(params):
+        # toy: pass-rate proxy peaks at value_coef≈0.5, grad_clip≈0.5
+        return 1.0 - abs(params["value_coef"] - 0.5) - abs(params["grad_clip_norm"] - 0.5)
+    study = run_study(objective, n_trials=12, seed=0)
+    assert study.best_value > 0.0
+    assert not (set(study.best_params) & SACRED_DIALS)    # winner uses no sacred dial
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -1390,3 +1440,10 @@ if __name__ == "__main__":  # pragma: no cover
 #      runner over windows x seeds, promotion gate's 3 conditions. 4 tests.
 #   C: Only robust, no-worse-breach improvements ship, so the deployed pass rate only
 #      ratchets up - the operational definition of repeatable passing.
+# [2026-06-13] Added Section P - HPO sacred-guard (M13).
+#   I: Tuning was needed but a naive search could tune away the patience that passes.
+#   R: SOW G6 (Optuna on non-sacred dials; gamma/lambda/scheduler hand-locked).
+#   A: Section P - guard refuses sacred dials, suggest returns only non-sacred, tiny
+#      Optuna study maximizes a pass-rate proxy with no sacred dial. 3 tests.
+#   C: HPO improves tunable stability while the patience underpinning passing stays
+#      locked - tuning can only help the pass rate, never sabotage it.

@@ -11,6 +11,11 @@ gamma, lambda, and the aggression-scheduler logic are hand-locked and OFF-LIMITS
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M13] Export the HPO API (sacred-guarded Optuna search).
+from .hpo import DEFAULT_SEARCH_SPACE, SACRED_DIALS, run_study, suggest, validate_not_sacred
+
+__all__ = ["SACRED_DIALS", "DEFAULT_SEARCH_SPACE", "suggest", "run_study", "validate_not_sacred"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

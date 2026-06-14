@@ -74,7 +74,9 @@ docs/
 - [x] **M12** — Scoreboard (pass-rate→breach→consistency→maxDD, PnL excluded) +
   WalkForwardRunner (12/2/1 mo, 7 seeds) + PromotionGate (≥3 seeds + improvement + no
   worse breach) (`quantra/ftmo_passing/validation/`).
-- [ ] M13 HPO · M14 live bridge · M15 acceptance
+- [x] **M13** — HPO: Optuna over non-sacred dials only, with a hard guard that refuses
+  γ/λ/scheduler (`quantra/learning_system/hpo/`).
+- [ ] M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future
 tests append there. **Every file carries an IRAC update log** — see
