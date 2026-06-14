@@ -1110,6 +1110,39 @@ def test_telemetry_header_carries_block_names_for_the_llm():
     assert "law_super_trend_bb" in blocks["law"]
 
 
+# =============================================================================
+# SECTION M — MLPINTERPRETER (the 7 required visuals) (M10)
+# FTMO link: these visuals make "did the internal behaviour help the bot pass?"
+# answerable - L0 dominance over time, regime separation, value near danger.
+# =============================================================================
+from quantra.diagnostics.mlp_interpreter import MLPInterpreter  # noqa: E402
+
+
+def test_mlp_interpreter_produces_all_seven_visuals(tmp_path):
+    log = TelemetryLogger("run_viz", out_dir=tmp_path)
+    rng = np.random.default_rng(0)
+    for t in range(40):
+        p = _demo_packet(t)
+        p.observation = list(rng.standard_normal(STATE_DIM))
+        p.chosen_action = int(rng.integers(0, 4))
+        p.value = float(rng.standard_normal())
+        p.hidden_summary = list(rng.standard_normal(8))
+        p.reward_decomposition = {"L0": float(rng.standard_normal() * 1e-2),
+                                  "L1": 1e-4, "L3": -1e-4}
+        p.risk_context = {"trailing_dd": float(abs(rng.standard_normal()))}
+        log.log_step(p)
+    recs = TelemetryLogger.load(log.flush())
+
+    interp = MLPInterpreter(recs, out_dir=tmp_path / "viz")
+    paths = interp.generate_all()
+    assert set(paths) == {                          # all 7 required visuals
+        "activation_trace", "hidden_state_projection", "action_value_timeline",
+        "reward_layer_timeline", "correlation_heatmap", "failure_atlas", "pass_day_atlas",
+    }
+    for name, path in paths.items():
+        assert path.exists() and path.stat().st_size > 0, f"{name} not written"
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -1212,3 +1245,9 @@ if __name__ == "__main__":  # pragma: no cover
 #      header carries schema version + grouped block names for the LLM. 2 tests.
 #   C: Any breach/pass-day is fully reconstructable, so the Risk Doctor can diagnose
 #      the cause - the loop that stops the same failure recurring and eroding pass-rate.
+# [2026-06-13] Added Section M - MLPInterpreter 7 visuals (M10).
+#   I: Telemetry arrays explain nothing without the standard visual evidence.
+#   R: MLP_INTERPRETABILITY_LAYER.md REQUIRED VISUALS (the 7, tied to passing).
+#   A: Section M - generate_all() writes all 7 PNGs from a telemetry run. 1 test.
+#   C: Internal behaviour becomes inspectable evidence, so robust pass-behaviour is
+#      distinguishable from fragile luck - protecting the pass rate.

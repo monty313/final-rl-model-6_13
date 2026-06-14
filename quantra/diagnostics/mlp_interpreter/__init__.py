@@ -11,6 +11,11 @@ Raw arrays explain nothing; these visuals make 'did the internal behaviour help 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M10] Export the interpreter (consumed by the Risk Doctor + reports).
+from .interpreter import MLPInterpreter
+
+__all__ = ["MLPInterpreter"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

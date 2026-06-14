@@ -65,8 +65,10 @@ docs/
   missed-opportunity metric + checkpointing (`quantra/learning_system/trainer/`).
 - [x] **M9** — TelemetryLogger (versioned schema, full per-step/-trade/-day data
   contract, JSONL round-trip) (`quantra/diagnostics/telemetry_logger/`).
-- [ ] M10 interpreter · M11 risk doctor · M12 validation ·
-  M13 HPO · M14 live bridge · M15 acceptance
+- [x] **M10** — MLPInterpreter: the 7 required visuals (activation trace, PCA
+  projection, action/value + reward-layer timelines, correlation heatmap, failure +
+  pass-day atlases) (`quantra/diagnostics/mlp_interpreter/`).
+- [ ] M11 risk doctor · M12 validation · M13 HPO · M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future
 tests append there. **Every file carries an IRAC update log** — see
