@@ -11,6 +11,19 @@ This is the single locked protocol that decides whether a brain is genuinely bet
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M12] Export the validation API.
+from .scoreboard import RunResult, Scoreboard
+from .walk_forward import (
+    N_SEEDS,
+    PromotionGate,
+    WalkForwardRunner,
+    Window,
+    generate_windows,
+)
+
+__all__ = ["Scoreboard", "RunResult", "WalkForwardRunner", "PromotionGate",
+           "Window", "generate_windows", "N_SEEDS"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

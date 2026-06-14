@@ -71,7 +71,10 @@ docs/
 - [x] **M11** — LLMRiskDoctor: read-only repo access, fails loud without the rulebook,
   output template + 8-failure taxonomy (no 9th), reverse-chain, evidence-only, no write
   method (`quantra/diagnostics/llm_risk_doctor/`).
-- [ ] M12 validation · M13 HPO · M14 live bridge · M15 acceptance
+- [x] **M12** — Scoreboard (pass-rate→breach→consistency→maxDD, PnL excluded) +
+  WalkForwardRunner (12/2/1 mo, 7 seeds) + PromotionGate (≥3 seeds + improvement + no
+  worse breach) (`quantra/ftmo_passing/validation/`).
+- [ ] M13 HPO · M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future
 tests append there. **Every file carries an IRAC update log** — see

@@ -1196,6 +1196,78 @@ def test_risk_doctor_never_invents_ninth_category():
     assert diag.classification in TAXONOMY or diag.classification == UNCLASSIFIED
 
 
+# =============================================================================
+# SECTION O — SCOREBOARD + WALK-FORWARD + PROMOTION GATE (M12)
+# FTMO link: rank brains by PASS RATE (not PnL), validate on rolling out-of-sample
+# windows x 7 seeds, and ship only robust, no-worse-breach improvements.
+# =============================================================================
+from quantra.ftmo_passing.validation import (  # noqa: E402
+    PromotionGate,
+    RunResult,
+    Scoreboard,
+    WalkForwardRunner,
+    generate_windows,
+)
+
+
+def test_scoreboard_ranks_by_pass_rate_then_breach_not_pnl():
+    # A: higher pass rate but huge PnL irrelevant; B: lower pass rate
+    a = Scoreboard([RunResult(True, False, True, 0.02, pnl=1.0) for _ in range(3)]
+                   + [RunResult(False, False, True, 0.02)])           # 75% pass
+    b = Scoreboard([RunResult(True, False, True, 0.02, pnl=9999.0)]
+                   + [RunResult(False, False, False, 0.03) for _ in range(3)])  # 25% pass, huge PnL
+    assert a.pass_rate > b.pass_rate
+    assert a.better_than(b)                       # PnL never rescues the lower passer
+    # tie on pass rate -> fewer breaches wins
+    c = Scoreboard([RunResult(True, True, True, 0.02), RunResult(True, False, True, 0.02)])
+    d = Scoreboard([RunResult(True, False, True, 0.02), RunResult(True, False, True, 0.02)])
+    assert d.better_than(c)                       # d has 0 breaches vs c's 1
+
+
+def test_walk_forward_generates_12_2_1_windows():
+    idx = pd.date_range("2021-01-01", "2023-06-30", freq="D")   # 2.5 years
+    wins = generate_windows(idx)
+    assert len(wins) >= 6                          # rolling monthly windows
+    w0 = wins[0]
+    # 12 months train, 2 months test
+    assert (w0.train_end.year - w0.train_start.year) * 12 + (w0.train_end.month - w0.train_start.month) == 12
+    assert (w0.test_end.year - w0.test_start.year) * 12 + (w0.test_end.month - w0.test_start.month) == 2
+    # 1-month step between consecutive windows
+    assert (wins[1].train_start - wins[0].train_start).days in (28, 29, 30, 31)
+
+
+def test_walk_forward_runner_runs_all_windows_x_seeds():
+    idx = pd.date_range("2021-01-01", "2022-09-30", freq="D")
+    runner = WalkForwardRunner(n_seeds=7)
+    calls = []
+
+    def eval_fn(window, seed):
+        calls.append(seed)
+        return RunResult(passed=(seed < 4), breached=(seed == 6), target_hit=True, max_drawdown=0.02)
+
+    sb, seed_pass = runner.run(idx, eval_fn)
+    assert len(seed_pass) == 7
+    assert sb.n == len(calls)                       # one result per (window, seed)
+    assert sum(1 for c in seed_pass if c > 0) == 4  # seeds 0..3 passed every window
+
+
+def test_promotion_gate_requires_3_seeds_improvement_no_worse_breach():
+    gate = PromotionGate()
+    base = Scoreboard([RunResult(True, False, True, 0.03) for _ in range(2)]
+                      + [RunResult(False, True, False, 0.05)])        # 1 breach
+    better = Scoreboard([RunResult(True, False, True, 0.02) for _ in range(3)])  # no breach, higher pass
+    ok, _ = gate.promote(better, base, seed_pass_counts=[2, 1, 1, 0, 0, 0, 0])   # 3 seeds passed
+    assert ok
+    # too few seeds -> reject even if better
+    no, reason = gate.promote(better, base, seed_pass_counts=[2, 0, 0, 0, 0, 0, 0])
+    assert not no and "seeds" in reason
+    # worse breach count -> reject
+    worse_breach = Scoreboard([RunResult(True, True, True, 0.02) for _ in range(3)]
+                              + [RunResult(True, True, True, 0.02)])   # 4 breaches
+    no2, reason2 = gate.promote(worse_breach, base, seed_pass_counts=[3, 2, 1, 0, 0, 0, 0])
+    assert not no2 and "breach" in reason2
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -1311,3 +1383,10 @@ if __name__ == "__main__":  # pragma: no cover
 #      Reward-Hijack classification with cited evidence + template render, never a 9th. 4 tests.
 #   C: Failures get a true, evidence-backed cause + safe prescription before they cost a
 #      challenge, and the doctor can never touch execution - it only protects passing.
+# [2026-06-13] Added Section O - Scoreboard + walk-forward + promotion gate (M12).
+#   I: Nothing ranked brains by pass-rate, validated out-of-sample, or gated promotion.
+#   R: SOW §1.3/I1 (ranking) + I2 (12/2/1, 7 seeds) + I3 (>=3 seeds + improvement + no worse breach).
+#   A: Section O - scoreboard ranks by pass-rate-not-PnL, 12/2/1 window generation,
+#      runner over windows x seeds, promotion gate's 3 conditions. 4 tests.
+#   C: Only robust, no-worse-breach improvements ship, so the deployed pass rate only
+#      ratchets up - the operational definition of repeatable passing.
