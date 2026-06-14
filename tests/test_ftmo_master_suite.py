@@ -817,6 +817,89 @@ def test_agent_drives_env_end_to_end():
             break
 
 
+# =============================================================================
+# SECTION I — REWARDENGINE (L0-L6 + QUAD) + E8 DOMINANCE (M6)
+# FTMO link: the objective. Layer 0 (net PnL) MUST dominate, or the bot games a
+# shaper while losing the trading game. E8 is the invariant that forbids that.
+# =============================================================================
+from quantra.learning_system.reward_engine import (  # noqa: E402
+    DailyMetrics,
+    QuadBonus,
+    RewardContext,
+    RewardEngine,
+)
+
+
+def test_e8_layer0_dominates_over_1000_rollouts():
+    """Over 1000 random rollouts, cumulative |L0| exceeds every shaping layer's."""
+    eng = RewardEngine()
+    rng = np.random.default_rng(7)
+    fails = 0
+    for _ in range(1000):
+        sums = {k: 0.0 for k in ("L0", "L1", "L2", "L3", "L4")}
+        for _ in range(256):                       # a rollout of 256 steps
+            ctx = RewardContext(
+                net_pnl_delta=float(rng.normal(0, 2e-3)),   # realistic per-step PnL
+                in_position=bool(rng.random() < 0.6),
+                momentum_aligned=bool(rng.random() < 0.5),
+                stagnation=bool(rng.random() < 0.3),
+                drawdown_pct=float(rng.uniform(0, 4.0)),
+                day_progress=float(rng.uniform(-1, 1)),
+                breach_risk=bool(rng.random() < 0.2),
+            )
+            d = eng.decompose(ctx)
+            for k in sums:
+                sums[k] += abs(d[k])
+        l0 = sums["L0"]
+        if any(sums[k] > l0 for k in ("L1", "L2", "L3", "L4")):
+            fails += 1
+    assert fails == 0, f"E8 violated in {fails}/1000 rollouts (a shaping layer outweighed L0)"
+
+
+def test_pain_zone_is_zero_below_threshold_and_monotonic():
+    eng = RewardEngine()
+    assert eng._pain(3.0) == 0.0                    # below 3.5% start -> no pain
+    p35, p38, p40 = eng._pain(3.5), eng._pain(3.8), eng._pain(4.0)
+    assert 0.0 <= p35 < p38 < p40                   # exponential, increasing to the wall
+    assert abs(p40 - 1.0) < 1e-9
+
+
+def test_reward_layer0_passthrough_dominates_a_single_step():
+    eng = RewardEngine()
+    # a meaningful L0 with all shaping on -> total is dominated by L0's sign/scale
+    d = eng.decompose(RewardContext(net_pnl_delta=0.01, in_position=True,
+                                    momentum_aligned=True, day_progress=1.0))
+    assert d["L0"] == 0.01
+    assert abs(d["shaped"]) < abs(d["L0"])          # shaping is a whisper
+
+
+def test_quad_bonus_respects_95pct_ceiling():
+    """Even with a huge flow streak, the QUAD bonus stays < 1x day PnL (E8-safe)."""
+    q = QuadBonus(enabled=True)
+    bonus = 0.0
+    for _ in range(20):                              # build a long flow streak
+        bonus = q.end_of_day(DailyMetrics(
+            drawdown_efficiency=float(_ + 1), law_productivity=float(_ + 1),
+            target_velocity=float(_ + 1), td_stability=float(-(_ + 1)),
+            day_pnl=100.0, passed=True))
+    assert bonus <= 0.95 * 100.0 + 1e-9              # ceiling holds
+
+
+def test_quad_bonus_zero_on_non_pass_day():
+    q = QuadBonus(enabled=True)
+    for i in range(10):
+        q.end_of_day(DailyMetrics(i, i, i, -i, day_pnl=100.0, passed=True))
+    assert q.end_of_day(DailyMetrics(1, 1, 1, -1, day_pnl=100.0, passed=False)) == 0.0
+    assert q.flow_streak == 0                        # streak resets on a failed day
+
+
+def test_env_uses_layered_reward_engine():
+    env = TradingEnv({"EURUSD": _sym(T=20, atr=1e-4)})
+    assert isinstance(env.reward_engine, RewardEngine)
+    _, reward, _, _ = env.step((HOLD, 0.0, 0))
+    assert isinstance(reward, float)                 # layered reward returned, no crash
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -890,3 +973,10 @@ if __name__ == "__main__":  # pragma: no cover
 #   C: The policy provably cannot sample an illegal/breach-bound action and its update
 #      is a correct trust-region step - so training under the M4 physics moves it toward
 #      passing, not toward the wall.
+# [2026-06-13] Added Section I - RewardEngine + QUAD + E8 (M6).
+#   I: The objective needed Layer-0 dominance proven, plus the pain ramp and QUAD ceiling.
+#   R: REWARD_DESIGN.md + E8 (L0 dominates) + E9 (QUAD 95% ceiling, pass-day gate).
+#   A: Section I - E8 dominance over 1000 rollouts, pain-zone monotonicity, L0 whisper,
+#      QUAD 95% ceiling + non-pass-day zero + streak reset, env-uses-engine. 6 tests.
+#   C: The training signal provably can't be hijacked by a shaper, so PPO optimizes real
+#      net progress inside the legal/risk-safe space - the objective that passes.

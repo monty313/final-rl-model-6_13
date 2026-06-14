@@ -56,7 +56,9 @@ docs/
 - [x] **M5** — PPOAgent (4 heads · 3×256 trunk · Beta size) + RolloutBuffer (10 fields,
   no replay) + PPO loss (summed 3-head log-prob, size-on-OPEN/pointer-on-CLOSE gating)
   (`quantra/learning_system/ppo_agent/`, `.../rollout_buffer/`).
-- [ ] M6 RewardEngine · M7 curriculum+episode · M8 trainer · M9 telemetry · M10 interpreter ·
+- [x] **M6** — RewardEngine (L0–L6 + QUAD bonus, 95% ceiling) + **E8 dominance**
+  (`quantra/learning_system/reward_engine/`); wired into the env.
+- [ ] M7 curriculum+episode · M8 trainer · M9 telemetry · M10 interpreter ·
   M11 risk doctor · M12 validation · M13 HPO · M14 live bridge · M15 acceptance
 
 **Tests:** one master suite — `tests/test_ftmo_master_suite.py` (run `pytest`). All future

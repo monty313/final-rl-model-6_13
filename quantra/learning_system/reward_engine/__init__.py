@@ -11,6 +11,11 @@ Layer 0 (net PnL after costs) must always dominate so the bot can never win the 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M6] Export the reward API (consumed by the env + trainer).
+from .reward import DailyMetrics, QuadBonus, RewardContext, RewardEngine
+
+__all__ = ["RewardEngine", "RewardContext", "QuadBonus", "DailyMetrics"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

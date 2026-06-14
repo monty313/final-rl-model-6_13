@@ -45,8 +45,12 @@ from quantra.ftmo_passing.challenge_state import ChallengeState
 from quantra.locked_core.cost_layer.costs import CostLayer
 from quantra.locked_core.laws.laws import compute_law_states
 from quantra.locked_core.risk_manager.risk import RiskManager
+from quantra.learning_system.reward_engine.reward import RewardContext, RewardEngine
 from quantra.market_pipeline.feature_builder import PRECOMPUTED_DIM, assemble_state
-from quantra.market_pipeline.feature_builder.schema import N_SLOTS
+from quantra.market_pipeline.feature_builder.schema import N_SLOTS, PRECOMPUTED_NAMES
+
+# Feature column index by name (reward proxies read a couple of market features).
+_COL = {name: i for i, name in enumerate(PRECOMPUTED_NAMES)}
 from quantra.market_pipeline.law_mask_engine.engine import (
     CLOSE,
     HOLD,
@@ -117,6 +121,7 @@ class TradingEnv:
 
         self.risk = RiskManager(self.challenge_cfg.ftmo_account_size, risk_cfg)
         self.cost = CostLayer(cost_cfg)
+        self.reward_engine = RewardEngine(self.challenge_cfg)   # M6 layered reward
         self.slots: Dict[str, List[Slot]] = {}
         self.account: ChallengeState = None  # set in reset()
         self.reset()
@@ -299,6 +304,31 @@ class TradingEnv:
                     self.account.charge(self.cost.close_cost(sym, sl.lots).total)
                     self.slots[sym][i] = Slot()
 
+    def _reward(self, sym: str) -> float:
+        """Build the RewardContext for the acting symbol and return the layered reward.
+
+        L0 = equity delta after costs / account (dominant). Momentum is a proxy
+        (in-position + CCI-sync agrees with trade dir + ATR alive); stagnation is left
+        False in M4/M6 (the 3x5m-bar tracker is a documented later refinement). The
+        full QUAD daily bonus is added at day boundaries by M7.
+        """
+        acct = self.account.account_size
+        l0 = (self.account.equity - self._prev_equity) / acct
+        pos = self._position(sym)
+        in_pos = pos != 0
+        row = self.data[sym].matrix[self.t]
+        cci = float(row[_COL["cci_sync_5m"]])
+        atr_alive = float(row[_COL["atr_dev_1m"]]) > 0.0
+        momentum = in_pos and (cci * pos > 0) and atr_alive
+        dd_pct = max(0.0, (self.account.peak_equity - self.account.equity) / acct * 100.0)
+        ctx = RewardContext(
+            net_pnl_delta=l0, in_position=in_pos, momentum_aligned=momentum,
+            stagnation=False, drawdown_pct=dd_pct,
+            day_progress=float(self.account.account_block()[5]),
+            breach_risk=dd_pct >= self.challenge_cfg.pain_zone_start_pct,
+        )
+        return self.reward_engine.reward(ctx)
+
     # ------------------------------------------------------------------ step
     def step(self, action) -> tuple:
         """One symbol-step. action = (direction:int, raw_size:float, pointer:int).
@@ -336,7 +366,7 @@ class TradingEnv:
                         self._mark_to_market()
                         self.done = True
 
-        reward = float(self.account.equity - self._prev_equity)  # Layer-0 proxy
+        reward = self._reward(sym)                                # M6 layered reward
         self._prev_equity = self.account.equity
         info.update(symbol=sym, equity=self.account.equity,
                     remaining_buffer=self.account.remaining_buffer,
@@ -378,3 +408,10 @@ def prepare_symbol_data(df_1m, symbol: str = "EURUSD", point_size: Optional[floa
 #   C: The bot now trains on faithful challenge physics where collective overshoot is
 #      impossible by construction — so the behaviour it learns is the behaviour that
 #      passes real challenges, not a simulation artifact.
+# [2026-06-13] M6 — env reward now uses the layered RewardEngine.
+#   I: step() returned a raw Layer-0 proxy; the policy needs the full layered reward.
+#   R: REWARD_DESIGN.md (L0 dominant + shaping) wired via RewardContext.
+#   A: Added self.reward_engine + _reward(sym) building the context (L0 equity delta,
+#      momentum proxy, daily drawdown for pain zone, day progress, breach-risk).
+#   C: Training now optimizes the real objective with Layer-0 dominance, so PPO is
+#      pulled toward net progress inside the legal/risk-safe space - i.e. toward passing.
