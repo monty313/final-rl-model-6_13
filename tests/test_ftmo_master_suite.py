@@ -1143,6 +1143,18 @@ def test_mlp_interpreter_produces_all_seven_visuals(tmp_path):
         assert path.exists() and path.stat().st_size > 0, f"{name} not written"
 
 
+def test_failure_atlas_module_is_real(tmp_path):
+    """The SOW-named failure_atlas module must be callable (not an empty shell)."""
+    from quantra.diagnostics.failure_atlas import failure_atlas, pass_day_atlas
+    log = TelemetryLogger("run_atlas", out_dir=tmp_path)
+    for t in range(12):
+        log.log_step(_demo_packet(t))
+    recs = TelemetryLogger.load(log.flush())
+    fa = failure_atlas(recs, out_dir=tmp_path / "fa")
+    pa = pass_day_atlas(recs, out_dir=tmp_path / "fa")
+    assert fa.exists() and pa.exists()
+
+
 # =============================================================================
 # SECTION N — LLMRISKDOCTOR (read-only, mandatory rulebook, 8-taxonomy) (M11)
 # FTMO link: catches models that pass by luck or drift to the wall BEFORE they cost a

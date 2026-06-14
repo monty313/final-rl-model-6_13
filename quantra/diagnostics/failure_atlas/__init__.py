@@ -11,6 +11,11 @@ Standardizing what breaches and clean passes LOOK like internally turns one-off 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13] Export the atlas builders (the SOW-named module's real API).
+from .atlas import failure_atlas, pass_day_atlas
+
+__all__ = ["failure_atlas", "pass_day_atlas"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.
