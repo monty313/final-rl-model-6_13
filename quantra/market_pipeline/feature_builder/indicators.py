@@ -136,6 +136,43 @@ def candle_structure(o, h, l, c, atr_1m):
     return ret, rng_atr, uwick, lwick
 
 
+# Dickey-Fuller 5% critical value (with constant). stat < this => reject unit root
+# => stationary (mean-reverting). Used by the Stationarity Regime Gate (F4: p<0.05).
+ADF_CRIT_5PCT = -2.86
+
+
+def rolling_df_stat(close: pd.Series, window: int = 100) -> pd.Series:
+    """Vectorized rolling Dickey-Fuller t-statistic (0-lag ADF) — stationarity proxy.
+
+    Regresses dy = a + b*y_lag over each trailing `window` and returns b/SE(b). A
+    more-negative stat means stronger mean reversion (stationary); a stat near/above
+    0 means a random walk / trend. We use the 0-lag DF (vectorized via rolling
+    moments) instead of statsmodels.adfuller per bar, which would be far too slow
+    over ~1.8M bars/symbol — speed here is what keeps walk-forward affordable.
+    Lookahead-safe: rolling/shift only look back.
+
+    Serves FTMO passing: the Stationarity Regime Gate trades only in the regime a
+    curriculum stage allows; a faithful, cheap regime signal keeps the bot from
+    learning habits in the wrong regime (which would breach when the regime flips).
+    """
+    y = close.astype(float)
+    ylag = y.shift(1)
+    dy = y - ylag
+    n = window
+    sx = ylag.rolling(n, min_periods=n).sum()
+    sy = dy.rolling(n, min_periods=n).sum()
+    sxx = (ylag * ylag).rolling(n, min_periods=n).sum()
+    sxy = (ylag * dy).rolling(n, min_periods=n).sum()
+    syy = (dy * dy).rolling(n, min_periods=n).sum()
+    ss_xx = sxx - sx * sx / n
+    ss_xy = sxy - sx * sy / n
+    ss_yy = syy - sy * sy / n
+    b = ss_xy / ss_xx.replace(0, np.nan)
+    ss_res = (ss_yy - b * ss_xy).clip(lower=0)
+    se_b = np.sqrt((ss_res / (n - 2)) / ss_xx.replace(0, np.nan))
+    return (b / se_b).replace([np.inf, -np.inf], np.nan)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.
 # Every change APPENDS a dated IRAC entry (newest last). Conclusion is ALWAYS why
@@ -151,3 +188,11 @@ def candle_structure(o, h, l, c, atr_1m):
 #      rolling/shift of past bars (no forward peek); inf->nan for clean downstream fill.
 #   C: The legal space stays identical to the blueprint and transfers to live, so the
 #      bot trains on — and keeps passing — the real challenge, not a drifted variant.
+# [2026-06-13] M3 — added rolling Dickey-Fuller stat for the Stationarity gate.
+#   I: The Stationarity Regime Gate (F4) needs a 100-bar ADF p<0.05 signal, but
+#      statsmodels.adfuller per bar over ~1.8M bars/symbol is far too slow.
+#   R: F4 (rolling ADF, 100-bar, p<0.05) + the offline-precompute / cheap-iteration design.
+#   A: Vectorized 0-lag DF t-stat via rolling moments + ADF_CRIT_5PCT=-2.86.
+#   C: The bot gets a faithful, cheap regime signal so it trades only in the allowed
+#      regime per stage — avoiding habits that breach when the regime flips — while
+#      keeping walk-forward affordable. Net: more validated seeds, steadier passing.

@@ -61,6 +61,18 @@ from quantra.market_pipeline.resampler import (
     build_all_timeframes,
     resample_ohlcv,
 )
+from quantra.locked_core.laws import LAW_NAMES, compute_law_states
+from quantra.market_pipeline.law_mask_engine import (
+    CLOSE,
+    HOLD,
+    MODE_LIVE,
+    MODE_SCHOOL,
+    OPEN_LONG,
+    OPEN_SHORT,
+    LawMask,
+    build_direction_mask,
+    build_pointer_mask,
+)
 from quantra.runtime import HardwareConfig, RuntimeConfig, plan
 from quantra.runtime.autoscale import plan_cpu_scale
 from quantra.runtime.device import RepresentativePolicy, available_devices
@@ -238,13 +250,13 @@ def test_as_of_merge_has_no_lookahead(make_1m):
 # tell breach-risk from safe trading (Term 1). Drift, leakage, or NaN here is a top
 # root cause of inconsistent passing — these guards make all three impossible.
 # =============================================================================
-def test_schema_total_is_176_with_raw_block():
-    # 146 normalized-only + 30 raw (operator override) = 176
-    assert STATE_DIM == 176
+def test_schema_total_is_179_with_raw_block_and_gate_ingredients():
+    # 89 market+time + 3 gate ingredients (M3) + 30 raw + 12 law + 35 trade + 3 + 7
+    assert STATE_DIM == 179
     for name, width in EXPECTED_WIDTHS.items():
         s, e = SCHEMA.block_spans[name]
         assert e - s == width, f"block {name} width drifted"
-    assert EXPECTED_WIDTHS["market_raw"] == 30
+    assert EXPECTED_WIDTHS["market"] == 92 and EXPECTED_WIDTHS["market_raw"] == 30
     assert len(SCHEMA.feature_names) == STATE_DIM
     assert len(set(SCHEMA.feature_names)) == STATE_DIM  # names unique
 
@@ -374,6 +386,138 @@ def test_impact_report_is_ftmo_framed():
     assert "snapshot.py --check" in rpt  # actionable follow-up present
 
 
+# =============================================================================
+# SECTION F — LAWMASK (9 laws + 3 gates, two enforcement modes)
+# FTMO link: laws are the bot's spine — they forbid the wrong direction with logit
+# -1e9 BEFORE the policy acts. A correct mask is the mechanical reason the bot can't
+# trade itself into the 4% wall. Laws are masks, never rewards (SOW R5).
+# =============================================================================
+_LIDX = {n: i for i, n in enumerate(LAW_NAMES)}
+
+
+def _feat_row(**named):
+    """A PRECOMPUTED_DIM zero feature row with specific named features set."""
+    r = np.zeros(PRECOMPUTED_DIM, dtype=np.float32)
+    for k, v in named.items():
+        r[PRECOMPUTED_NAMES.index(k)] = v
+    return r
+
+
+def _law(row, name):
+    return compute_law_states(row)[_LIDX[name]]
+
+
+def test_law_neutral_row_all_directional_inactive():
+    s = compute_law_states(_feat_row())
+    assert s.shape == (12,)
+    assert np.all(s[:9] == 0)  # no directional law active on a zero row
+
+
+def test_super_trend_bb_buy_and_sell():
+    buy = _feat_row(boll_bb20_up_5m=0.5, boll_bb200_up_5m=0.5,
+                    boll_bb20_up_30m=0.5, boll_bb200_up_30m=0.5)
+    assert _law(buy, "law_super_trend_bb") == 1
+    sell = _feat_row(boll_bb20_lo_5m=-0.5, boll_bb200_lo_5m=-0.5,
+                     boll_bb20_lo_30m=-0.5, boll_bb200_lo_30m=-0.5)
+    assert _law(sell, "law_super_trend_bb") == -1
+
+
+def test_super_trend_cci_requires_above_100():
+    dev_only = _feat_row(cci30_dev_5m=0.2, cci100_dev_5m=0.2, cci30_dev_30m=0.2, cci100_dev_30m=0.2,
+                         cci30_norm_5m=0.5, cci100_norm_5m=0.5, cci30_norm_30m=0.5, cci100_norm_30m=0.5)
+    assert _law(dev_only, "law_super_trend_cci") == 0   # not above +100
+    assert _law(dev_only, "law_trend_cci") == 1         # trend (no +100) DOES fire
+    full = _feat_row(cci30_dev_5m=0.2, cci100_dev_5m=0.2, cci30_dev_30m=0.2, cci100_dev_30m=0.2,
+                     cci30_norm_5m=1.5, cci100_norm_5m=1.5, cci30_norm_30m=1.5, cci100_norm_30m=1.5)
+    assert _law(full, "law_super_trend_cci") == 1
+
+
+def test_shifted_sma_laws_use_align_flags():
+    buy = _feat_row(ssma_align_1m=1, ssma_align_5m=1, ssma_align_30m=1)
+    assert _law(buy, "law_super_trend_ssma") == 1       # needs 1m+5m+30m
+    assert _law(buy, "law_trend_ssma") == 1             # needs 5m+30m
+    pb = _feat_row(ssma_align_5m=1, ssma_align_30m=1, ssma_align_1m=-1)
+    assert _law(pb, "law_pullback_ssma") == 1           # 1m pulls back inside HTF up
+    assert _law(pb, "law_super_trend_ssma") == 0
+
+
+def test_pullback_cci_desync():
+    buy = _feat_row(cci10_dev_30m=0.2, cci100_dev_30m=0.2, cci100_dev_5m=0.2, cci10_dev_5m=-0.2)
+    assert _law(buy, "law_pullback_cci") == 1
+
+
+def test_gates_atr_spread_stationarity():
+    g = _feat_row(atr_dev_1m=0.1, atr_dev_30m=0.1, spread_range_ratio_1m=0.3, adf_stat_1m=-3.5)
+    assert _law(g, "gate_atr_liquidity") == 1
+    assert _law(g, "gate_spread") == 1
+    assert _law(g, "gate_stationarity") == 1            # adf below -2.86 -> stationary
+    closed = _feat_row(atr_dev_1m=-0.1, spread_range_ratio_1m=2.0, adf_stat_1m=0.0)
+    assert _law(closed, "gate_atr_liquidity") == 0
+    assert _law(closed, "gate_spread") == 0
+    assert _law(closed, "gate_stationarity") == 0
+
+
+def _gates_open():
+    s = np.zeros(12, dtype=np.float32)
+    s[9] = s[10] = s[11] = 1  # atr, spread, stationarity open; no directional law
+    return s
+
+
+def test_mask_position_legality_and_hold_always_legal():
+    """The SOW §2.3 acceptance: -1e9 on every forbidden action per position state."""
+    s = _gates_open()
+    m = build_direction_mask(s, position=0, n_open=0)          # FLAT
+    assert m[HOLD] == 0 and m[OPEN_LONG] == 0 and m[OPEN_SHORT] == 0
+    assert m[CLOSE] < -1e8                                     # nothing to close
+    m = build_direction_mask(s, position=1, n_open=1)          # LONG
+    assert m[OPEN_SHORT] < -1e8 and m[CLOSE] == 0 and m[HOLD] == 0
+    m = build_direction_mask(s, position=-1, n_open=1)         # SHORT
+    assert m[OPEN_LONG] < -1e8 and m[CLOSE] == 0
+    m = build_direction_mask(s, position=1, n_open=5)          # slots full
+    assert m[OPEN_LONG] < -1e8 and m[OPEN_SHORT] < -1e8
+    m = build_direction_mask(s, position=0, n_open=0)
+    assert m[CLOSE] < -1e8                                     # 0 open -> CLOSE masked
+
+
+def test_mask_live_buy_law_bans_shorts():
+    s = _gates_open(); s[_LIDX["law_super_trend_bb"]] = 1
+    m = build_direction_mask(s, position=0, n_open=0, mode=MODE_LIVE)
+    assert m[OPEN_SHORT] < -1e8 and m[OPEN_LONG] == 0 and m[HOLD] == 0
+
+
+def test_mask_closed_gate_bans_new_opens():
+    s = _gates_open(); s[9] = 0  # ATR gate closed
+    m = build_direction_mask(s, position=0, n_open=0, mode=MODE_LIVE)
+    assert m[OPEN_LONG] < -1e8 and m[OPEN_SHORT] < -1e8 and m[HOLD] == 0
+
+
+def test_mask_school_permits_only_required_direction():
+    s = _gates_open(); s[_LIDX["law_trend_bb"]] = 1
+    m = build_direction_mask(s, position=0, n_open=0, mode=MODE_SCHOOL,
+                             required_laws=["law_trend_bb"])
+    assert m[OPEN_LONG] == 0 and m[OPEN_SHORT] < -1e8       # buy permission only
+    m2 = build_direction_mask(_gates_open(), position=0, n_open=0, mode=MODE_SCHOOL,
+                              required_laws=["law_trend_bb"])
+    assert m2[OPEN_LONG] < -1e8 and m2[OPEN_SHORT] < -1e8   # law inactive -> no permission
+    assert m2[HOLD] == 0
+
+
+def test_pointer_mask_targets_occupied_slots_only():
+    pm = build_pointer_mask([1, 0, 1, 0, 0])
+    assert pm[0] == 0 and pm[2] == 0
+    assert pm[1] < -1e8 and pm[3] < -1e8 and pm[4] < -1e8
+
+
+def test_lawmask_wrapper_end_to_end():
+    row = _feat_row(atr_dev_1m=0.1, atr_dev_30m=0.1, spread_range_ratio_1m=0.3, adf_stat_1m=-3.5,
+                    boll_bb20_up_5m=0.5, boll_bb200_up_5m=0.5,
+                    boll_bb20_up_30m=0.5, boll_bb200_up_30m=0.5)
+    res = LawMask(mode=MODE_LIVE).step(row, position=0, occupied=[0, 0, 0, 0, 0])
+    assert res.opens_allowed_by_gates is True
+    assert res.direction_mask[OPEN_SHORT] < -1e8           # buy super-trend bans shorts
+    assert res.direction_mask[OPEN_LONG] == 0
+
+
 # Allow `python tests/test_ftmo_master_suite.py` to run the whole suite directly.
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
@@ -413,3 +557,14 @@ if __name__ == "__main__":  # pragma: no cover
 #      LLM-interpretation, AST dependency-graph, and FTMO-framed-report tests.
 #   C: The observation is now both faithful AND change-guarded, so any future obs
 #      change is caught with a concrete follow-up list before it can hurt passing.
+# [2026-06-13] Added Section F - LawMask (M3) + gate ingredients (dim 176->179).
+#   I: The bot needed its spine (which directions are legal) proven correct before
+#      training, and the snapshot needed re-pinning after adding gate ingredients.
+#   R: THE_TRADING_CODE.md (9 laws + 3 gates, exact params) + SOW C5 (-1e9) + §2.3-2.4
+#      position/slot legality + the two enforcement modes.
+#   A: Section F - law states per family (incl. CCI +100, ssma align, pullback desync),
+#      3 gates, position/slot legality, live-ban vs school-permission, pointer mask,
+#      end-to-end wrapper. Re-pinned the state-vector snapshot to 179.
+#   C: The legal space is verified exactly per blueprint, so the mask mechanically
+#      blocks breach-bound directions in both training and live - the foundation of
+#      not breaching, which is the foundation of consistent passing.

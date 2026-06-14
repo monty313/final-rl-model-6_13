@@ -11,6 +11,26 @@ It is the per-step enforcement point that keeps the policy inside the legal spac
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M3] Export the mask API. engine.py turns law states + position +
+# slots into the -1e9 action mask; consumed by the env (M4) and PPOAgent (M5).
+from .engine import (
+    CLOSE,
+    HOLD,
+    MODE_LIVE,
+    MODE_SCHOOL,
+    OPEN_LONG,
+    OPEN_SHORT,
+    LawMask,
+    MaskResult,
+    build_direction_mask,
+    build_pointer_mask,
+)
+
+__all__ = [
+    "LawMask", "MaskResult", "build_direction_mask", "build_pointer_mask",
+    "MODE_LIVE", "MODE_SCHOOL", "HOLD", "OPEN_LONG", "OPEN_SHORT", "CLOSE",
+]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

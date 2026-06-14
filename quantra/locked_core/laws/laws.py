@@ -1,0 +1,166 @@
+"""The 9 directional laws + 3 gates — computed from the M2 feature matrix. 🔴
+
+WHAT THIS MODULE DOES
+---------------------
+Computes the 12 law/gate STATES (the schema `law` block) from the normalized market
+features, exactly per THE_TRADING_CODE.md / SOW-D4. Directional laws emit -1 (sell
+context) / 0 (inactive) / +1 (buy context); gates emit 0 (closed) / 1 (open).
+Vectorized over the whole matrix (offline precompute) and per-row (live).
+
+The 9 directional laws (3 families x 3):
+  Super Trend: Bollinger / CCI / Shifted-SMA   (strongest expansion; continuation only)
+  Trend:       Bollinger / CCI / Shifted-SMA   (directional structure; one side legal)
+  Pull Back:   Bollinger / CCI / Shifted-SMA   (retrace inside HTF direction; that side only)
+The 3 gates (non-directional): ATR Liquidity · Spread Filter · Stationarity Regime.
+
+HOW IT SERVES REPEATED FTMO-STYLE PASSING
+-----------------------------------------
+Laws are the bot's SPINE. They run BEFORE the policy and define what is legal; the
+mask (mask_engine) then forbids the wrong direction with logit -1e9. A clean law
+state saves the bot from directional stupidity that would breach the 4% wall — the
+single biggest source of avoidable breaches. Laws are NEVER reward terms (SOW R5).
+
+4H OBSERVATION RULE 🔴: no law reads 4H to activate. 4H is context only. Every law
+binds exactly the timeframes written in THE_TRADING_CODE.md (1m/5m/30m as specified).
+
+LLM RISK DOCTOR — HOW TO THINK ABOUT THIS FILE
+----------------------------------------------
+Rulebook: ``docs/MLP_INTERPRETABILITY_LAYER.md`` (Term 2 Law Context). Before blaming
+the actor for a "bad" action, verify what was LEGAL here: a directional law in +1
+bans OPEN_SHORT; in -1 bans OPEN_LONG. If a law flag looks wrong, the break is in its
+INGREDIENT (the market feature), not the actor. These states are deterministic from
+price — identical across seeds — so a law-state difference across runs is a data bug.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from quantra.market_pipeline.feature_builder.indicators import ADF_CRIT_5PCT
+from quantra.market_pipeline.feature_builder.schema import PRECOMPUTED_NAMES, SCHEMA
+
+# The 12 law/gate names, in schema `law` block order. compute_law_states returns
+# columns in exactly this order so they drop straight into the observation.
+LAW_NAMES = list(SCHEMA.blocks["law"])
+DIRECTIONAL_LAWS = LAW_NAMES[:9]   # -1/0/+1
+GATES = LAW_NAMES[9:]              # 0/1
+
+# Column index of each precomputed feature name (laws read normalized features).
+_IDX = {name: i for i, name in enumerate(PRECOMPUTED_NAMES)}
+
+# +100 / -100 CCI thresholds expressed in the normalized encoding (cci_norm = CCI/100).
+_CCI_HI, _CCI_LO = 1.0, -1.0
+
+
+def _c(mat: np.ndarray, name: str) -> np.ndarray:
+    """Column accessor by feature name (raises clearly if an ingredient is missing)."""
+    return mat[:, _IDX[name]]
+
+
+def _state(buy: np.ndarray, sell: np.ndarray) -> np.ndarray:
+    """-1/0/+1 from mutually-exclusive buy/sell boolean masks."""
+    return np.where(buy, 1.0, np.where(sell, -1.0, 0.0)).astype(np.float32)
+
+
+def compute_law_states(matrix: np.ndarray) -> np.ndarray:
+    """Compute all 12 law/gate states for a (T, P) feature matrix (or a (P,) row).
+
+    Returns (T, 12) float32 in LAW_NAMES order. Pure function of the market features,
+    so it is precomputable offline and identical across seeds — exactly what makes
+    law context reproducible for the Risk Doctor.
+    """
+    mat = np.atleast_2d(matrix).astype(np.float32)
+
+    # ---- SUPER TREND ----
+    # ST1 Bollinger: above BOTH outer upper bands (BB20+BB200) on 5m AND 30m -> buy.
+    st1_buy = (_c(mat, "boll_bb20_up_5m") > 0) & (_c(mat, "boll_bb200_up_5m") > 0) \
+        & (_c(mat, "boll_bb20_up_30m") > 0) & (_c(mat, "boll_bb200_up_30m") > 0)
+    st1_sell = (_c(mat, "boll_bb20_lo_5m") < 0) & (_c(mat, "boll_bb200_lo_5m") < 0) \
+        & (_c(mat, "boll_bb20_lo_30m") < 0) & (_c(mat, "boll_bb200_lo_30m") < 0)
+
+    # ST2 CCI: all four CCIs (30,100 on 5m,30m) above applied SMA AND above +100.
+    cci_dev = [f"cci{p}_dev_{tf}" for tf in ("5m", "30m") for p in (30, 100)]
+    cci_nrm = [f"cci{p}_norm_{tf}" for tf in ("5m", "30m") for p in (30, 100)]
+    st2_buy = np.all([_c(mat, n) > 0 for n in cci_dev], axis=0) \
+        & np.all([_c(mat, n) > _CCI_HI for n in cci_nrm], axis=0)
+    st2_sell = np.all([_c(mat, n) < 0 for n in cci_dev], axis=0) \
+        & np.all([_c(mat, n) < _CCI_LO for n in cci_nrm], axis=0)
+
+    # ST3 Shifted SMA: price above both shifted lines on 1m, 5m AND 30m.
+    st3_buy = (_c(mat, "ssma_align_1m") == 1) & (_c(mat, "ssma_align_5m") == 1) \
+        & (_c(mat, "ssma_align_30m") == 1)
+    st3_sell = (_c(mat, "ssma_align_1m") == -1) & (_c(mat, "ssma_align_5m") == -1) \
+        & (_c(mat, "ssma_align_30m") == -1)
+
+    # ---- TREND ----
+    # T1 Bollinger: above MIDLINES of BB20+BB200 on 5m AND 30m.
+    t1_buy = (_c(mat, "boll_bb20_mid_5m") > 0) & (_c(mat, "boll_bb200_mid_5m") > 0) \
+        & (_c(mat, "boll_bb20_mid_30m") > 0) & (_c(mat, "boll_bb200_mid_30m") > 0)
+    t1_sell = (_c(mat, "boll_bb20_mid_5m") < 0) & (_c(mat, "boll_bb200_mid_5m") < 0) \
+        & (_c(mat, "boll_bb20_mid_30m") < 0) & (_c(mat, "boll_bb200_mid_30m") < 0)
+
+    # T2 CCI: all four CCIs above their applied SMA (no +100 requirement).
+    t2_buy = np.all([_c(mat, n) > 0 for n in cci_dev], axis=0)
+    t2_sell = np.all([_c(mat, n) < 0 for n in cci_dev], axis=0)
+
+    # T3 Shifted SMA: price above both lines on 5m AND 30m.
+    t3_buy = (_c(mat, "ssma_align_5m") == 1) & (_c(mat, "ssma_align_30m") == 1)
+    t3_sell = (_c(mat, "ssma_align_5m") == -1) & (_c(mat, "ssma_align_30m") == -1)
+
+    # ---- PULL BACK ----
+    # PB1 Bollinger: 30m above BOTH mids; 5m above BB200 mid but BELOW BB20 mid.
+    pb1_buy = (_c(mat, "boll_bb20_mid_30m") > 0) & (_c(mat, "boll_bb200_mid_30m") > 0) \
+        & (_c(mat, "boll_bb200_mid_5m") > 0) & (_c(mat, "boll_bb20_mid_5m") < 0)
+    pb1_sell = (_c(mat, "boll_bb20_mid_30m") < 0) & (_c(mat, "boll_bb200_mid_30m") < 0) \
+        & (_c(mat, "boll_bb200_mid_5m") < 0) & (_c(mat, "boll_bb20_mid_5m") > 0)
+
+    # PB2 CCI: 30m both CCIs (10,100) above SMA; 5m LARGE(100) above while SMALL(10) below.
+    pb2_buy = (_c(mat, "cci10_dev_30m") > 0) & (_c(mat, "cci100_dev_30m") > 0) \
+        & (_c(mat, "cci100_dev_5m") > 0) & (_c(mat, "cci10_dev_5m") < 0)
+    pb2_sell = (_c(mat, "cci10_dev_30m") < 0) & (_c(mat, "cci100_dev_30m") < 0) \
+        & (_c(mat, "cci100_dev_5m") < 0) & (_c(mat, "cci10_dev_5m") > 0)
+
+    # PB3 Shifted SMA: 5m AND 30m above both lines; 1m BELOW both lines.
+    pb3_buy = (_c(mat, "ssma_align_5m") == 1) & (_c(mat, "ssma_align_30m") == 1) \
+        & (_c(mat, "ssma_align_1m") == -1)
+    pb3_sell = (_c(mat, "ssma_align_5m") == -1) & (_c(mat, "ssma_align_30m") == -1) \
+        & (_c(mat, "ssma_align_1m") == 1)
+
+    # ---- GATES (0/1) ----
+    # ATR Liquidity: ATR above its shifted reference on BOTH 1m and 30m.
+    atr_gate = ((_c(mat, "atr_dev_1m") > 0) & (_c(mat, "atr_dev_30m") > 0)).astype(np.float32)
+    # Spread Filter: current spread < last 1m candle range (ratio < 1).
+    spread_gate = (_c(mat, "spread_range_ratio_1m") < 1.0).astype(np.float32)
+    # Stationarity: DF stat below the 5% critical value => stationary (1). The mask
+    # engine applies Mode A/B; the observed flag is the raw stationary indicator.
+    stat_gate = (_c(mat, "adf_stat_1m") < ADF_CRIT_5PCT).astype(np.float32)
+
+    states = np.stack([
+        _state(st1_buy, st1_sell), _state(st2_buy, st2_sell), _state(st3_buy, st3_sell),
+        _state(t1_buy, t1_sell), _state(t2_buy, t2_sell), _state(t3_buy, t3_sell),
+        _state(pb1_buy, pb1_sell), _state(pb2_buy, pb2_sell), _state(pb3_buy, pb3_sell),
+        atr_gate, spread_gate, stat_gate,
+    ], axis=1).astype(np.float32)
+
+    return states[0] if matrix.ndim == 1 else states
+
+
+def law_states_dict(row_states: np.ndarray) -> dict:
+    """Name->value for one row's 12 states (telemetry + LLM Risk Doctor readability)."""
+    return {name: float(v) for name, v in zip(LAW_NAMES, row_states)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13. I/R/A/C; Conclusion is always
+# why this helps the bot pass FTMO consistently. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] M3 — implemented the 9 laws + 3 gates.
+#   I: The bot had no spine — nothing defined which directions were legal, so a
+#      policy could open straight into the 4% wall.
+#   R: THE_TRADING_CODE.md (9 laws + 3 gates, exact TFs/params, SOW-D4); laws are
+#      masks never rewards; 4H observed-never-required.
+#   A: Vectorized compute_law_states reading the M2 features -> -1/0/+1 directional
+#      states + 0/1 gates, in schema law-block order; deterministic from price.
+#   C: The legal space is now defined exactly per the blueprint, so the mask can
+#      forbid breach-bound directions before the policy ever acts — the foundation
+#      of not breaching, which is the foundation of passing.

@@ -11,6 +11,18 @@ Laws run BEFORE the policy and forbid the directions that would breach the wall 
 BINDING RULEBOOK FOR THE LLM RISK DOCTOR: ``docs/MLP_INTERPRETABILITY_LAYER.md``.
 """
 
+# [C - 2026-06-13, M3] Export the law-state API. laws.py computes the 12 states from
+# the M2 features; the mask engine (market_pipeline/law_mask_engine) consumes them.
+from .laws import (
+    DIRECTIONAL_LAWS,
+    GATES,
+    LAW_NAMES,
+    compute_law_states,
+    law_states_dict,
+)
+
+__all__ = ["LAW_NAMES", "DIRECTIONAL_LAWS", "GATES", "compute_law_states", "law_states_dict"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE LOG (IRAC) - standing rule since 2026-06-13.

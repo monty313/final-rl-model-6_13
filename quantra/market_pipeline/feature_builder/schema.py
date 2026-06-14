@@ -7,17 +7,17 @@ blocks, so the total width is fixed and asserted everywhere. This is the contrac
 the FeatureBuilder fills, the env assembles, the PPO trunk consumes, and the
 TelemetryLogger labels (the data contract requires "grouped feature block names").
 
-Block widths (default INCLUDE_RAW_INPUTS=True -> total 176):
-    market      89   normalized/ATR-scaled market+time (precomputed, memmapped)
+Block widths (default INCLUDE_RAW_INPUTS=True -> total 179):
+    market      92   normalized market+time + 3 gate ingredients (precomputed)
     market_raw  30   RAW SMA + RAW CCI inputs (operator-directed; precomputed)
     law         12   9 laws + 3 gates (filled by LawMask, M3)
     trade x5    35   7 features x 5 slots (env, M4)
     portfolio    3   aggregates across slots (env, M4)
     account      7   equity/buffers + 2 challenge-progress (env, M4)
     ------------------
-    TOTAL      176   (146 when INCLUDE_RAW_INPUTS=False)
+    TOTAL      179   (149 when INCLUDE_RAW_INPUTS=False)
 
-The first TWO blocks (market + market_raw = 119) are action-independent and are the
+The first TWO blocks (market + market_raw = 122) are action-independent and are the
 FeatureBuilder's precomputed output (``PRECOMPUTED_NAMES`` / ``PRECOMPUTED_DIM``).
 
 OPERATOR OVERRIDE [2026-06-13]
@@ -98,6 +98,10 @@ def _market_names() -> List[str]:
         names += [f"adx5_{tf}", f"adx15_{tf}"]
     names += ["candle_return_1m", "candle_range_1m", "candle_uwick_1m", "candle_lwick_1m"]
     names += ["time_sin_hour", "time_cos_hour", "time_dow"]
+    # Gate ingredients [M3]: Spread Filter (spread vs ATR + vs candle range) and
+    # Stationarity Regime Gate (rolling Dickey-Fuller stat). Observable per the
+    # law-ingredient coverage rule so the bot sees why a gate opened/closed.
+    names += ["spread_atr_1m", "spread_range_ratio_1m", "adf_stat_1m"]
     return names
 
 
@@ -221,7 +225,7 @@ RAW_FEATURE_NAMES = set(SCHEMA.blocks["market_raw"])
 # Canonical block widths — asserted by the master suite so a refactor can't silently
 # drop a challenge-critical feature.
 EXPECTED_WIDTHS = {
-    "market": 89,
+    "market": 92,  # 89 market+time + 3 gate ingredients (spread x2, adf) [M3]
     "market_raw": 30 if INCLUDE_RAW_INPUTS else 0,
     "law": 12, "trade": 35, "portfolio": 3, "account": 7,
 }
@@ -282,3 +286,13 @@ def state_vector_fingerprint() -> dict:
 #      and, if raw inputs hurt pass-rate or stability, disable them without touching
 #      the rest of the perception. Net: more signal to try, with a clean off-ramp that
 #      protects consistent passing.
+# [2026-06-13] M3 — added gate ingredients (spread x2, adf) to the market block.
+#   I: The Spread Filter + Stationarity gates were in the law block but their
+#      INGREDIENTS (spread vs ATR/range, ADF stat) weren't observable — violating the
+#      law-ingredient coverage rule, so the bot couldn't see WHY a gate opened/closed.
+#   R: Law-ingredient coverage rule [M] + F4 (rolling ADF 100-bar p<0.05).
+#   A: Added spread_atr_1m, spread_range_ratio_1m, adf_stat_1m to `market` (89->92);
+#      STATE_DIM 176->179. Snapshot guard flags the drift (re-pinned via --update).
+#   C: Every gate's ingredients are now observable, so the bot learns gate-aware
+#      behaviour (trade only in live/stationary regimes) instead of treating gates as
+#      opaque on/off — fewer dead-market/illiquid trades that erode the pass rate.

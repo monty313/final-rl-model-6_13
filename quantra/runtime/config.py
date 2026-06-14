@@ -77,6 +77,19 @@ ASSET_CLASS: Dict[str, str] = {
     "US30": "index",
 }
 
+# Point size = price value of 1 MT5 "point" per symbol. MT5 exports the <SPREAD>
+# column in POINTS, so the Spread Filter law (spread vs candle range, both in price)
+# needs this to convert. Broker-dependent; conservative defaults for 5-digit forex,
+# 2-digit gold, 1.0 index. Used by the FeatureBuilder's spread features + the
+# Spread Filter gate so the bot learns under realistic execution friction (SOW-H2).
+POINT_SIZE: Dict[str, float] = {
+    "EURUSD": 1e-5,
+    "GBPUSD": 1e-5,
+    "XAUUSD": 1e-2,
+    "US30": 1.0,
+}
+DEFAULT_POINT_SIZE: float = 1e-5
+
 DRIVE_FILE_IDS: Dict[str, str] = {
     "EURUSD": "1tsR789vdRYE4rwDAE-hreWF2zN1slcjH",
     "GBPUSD": "1503qJQxjLwA2O0zIiakiOM_68Ucb-ypm",
@@ -159,7 +172,7 @@ class RuntimeConfig:
     # quantra.market_pipeline.feature_builder.schema.STATE_DIM (176 with raw inputs
     # on; 146 off) without importing it (avoids an import cycle); the master suite
     # asserts they match. We never let this nominal value leak into training shapes.
-    nominal_state_dim: int = field(default_factory=lambda: 176 if INCLUDE_RAW_INPUTS else 146)
+    nominal_state_dim: int = field(default_factory=lambda: 179 if INCLUDE_RAW_INPUTS else 149)
 
     def to_dict(self) -> dict:
         """Flatten for telemetry's run-config block (M9 data contract)."""
@@ -208,3 +221,10 @@ def in_colab() -> bool:
 #   A: Set nominal_state_dim = 146; the master suite now asserts config == schema.
 #   C: The hardware race times the true observation width, so the device/cost choice
 #      reflects the real workload — no wasted GPU spend, faster path to a validated pass rate.
+# [2026-06-13] nominal_state_dim -> 179/149 (M3 gate ingredients) + added POINT_SIZE.
+#   I: M3 added 3 gate-ingredient features (176->179); and the Spread Filter needs a
+#      points->price conversion the config didn't provide.
+#   R: Law-ingredient coverage (spread, ADF) + SOW-H2 realistic spread costs.
+#   A: Bumped nominal_state_dim to 179 (raw on)/149 (off); added per-symbol POINT_SIZE.
+#   C: config stays in lockstep with the schema and the bot sees real spread friction,
+#      so it learns to avoid illiquid/dead-market trades that quietly erode pass-rate.

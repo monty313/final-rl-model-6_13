@@ -46,7 +46,10 @@ docs/
   (`market_raw`, toggle `config.INCLUDE_RAW_INPUTS`; risks/safeguards in
   [`feature_builder/RAW_INPUTS.md`](quantra/market_pipeline/feature_builder/RAW_INPUTS.md))
 - [x] **Change-impact tracker** — snapshot guard + AST analyzer ([`CHANGE_IMPACT.md`](CHANGE_IMPACT.md))
-- [ ] M3 LawMask · M4 Env+Risk+Cost · M5 PPOAgent · M6 RewardEngine · M7 curriculum+episode ·
+- [x] **M3** — LawMask: 9 laws + 3 gates, two enforcement modes, −1e9 masking
+  (`quantra/locked_core/laws/` + `quantra/market_pipeline/law_mask_engine/`); state
+  vector → **179** (added 3 gate ingredients: spread×2, ADF).
+- [ ] M4 Env+Risk+Cost · M5 PPOAgent · M6 RewardEngine · M7 curriculum+episode ·
   M8 trainer · M9 telemetry · M10 interpreter · M11 risk doctor · M12 validation · M13 HPO ·
   M14 live bridge · M15 acceptance
 
@@ -76,3 +79,8 @@ makes the bot pass FTMO more consistently. Rule: [quantra/constitution/update_ru
   - **R:** Operator directives; raw block overrides the no-raw-price rule (RAW_INPUTS.md); tracker per CHANGE_IMPACT.md.
   - **A:** Added `market_raw` (30, unclipped, flagged, toggleable); built snapshot guard + AST analyzer + pre-commit; 28 master-suite tests green.
   - **C:** The policy gains the requested signal with a clean off-ramp, and the observation can't change by accident — both protect consistent passing.
+- **[2026-06-13]** M3 complete — LawMask (9 laws + 3 gates) + 3 gate ingredients (dim 179).
+  - **I:** The bot had no spine defining legal directions, and 2 gates lacked observable ingredients.
+  - **R:** THE_TRADING_CODE.md (exact laws/params) + SOW C5 (−1e9) + law-ingredient coverage rule.
+  - **A:** Built `laws.py` (12 states) + `law_mask_engine` (masks, both modes); added spread/ADF ingredients; re-pinned snapshot to 179. 40 tests green.
+  - **C:** Breach-bound directions are now mechanically blocked before the policy acts — the foundation of not breaching, hence of consistent passing.

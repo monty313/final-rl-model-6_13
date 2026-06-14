@@ -75,7 +75,7 @@ def _flag_three_way(cond_pos: pd.Series, cond_neg: pd.Series) -> pd.Series:
     return out
 
 
-def _compute_tf_features(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+def _compute_tf_features(df: pd.DataFrame, tf: str, point_size: float = 1e-5) -> pd.DataFrame:
     """Compute every schema market feature that belongs to timeframe ``tf``.
 
     Returns a frame indexed like ``df`` with columns named exactly per schema
@@ -159,6 +159,13 @@ def _compute_tf_features(df: pd.DataFrame, tf: str) -> pd.DataFrame:
         out["time_sin_hour"] = pd.Series(np.sin(2 * np.pi * hour / 24.0), index=idx)
         out["time_cos_hour"] = pd.Series(np.cos(2 * np.pi * hour / 24.0), index=idx)
         out["time_dow"] = pd.Series((idx.dayofweek / 4.0) * 2.0 - 1.0, index=idx)
+        # Gate ingredients [M3]. MT5 <SPREAD> is in POINTS; convert to price via
+        # point_size to compare against ATR + candle range (Spread Filter). adf_stat
+        # is the rolling Dickey-Fuller stat (Stationarity gate).
+        spread_price = df["spread"].astype(float) * point_size
+        out["spread_atr_1m"] = spread_price / atr_tf
+        out["spread_range_ratio_1m"] = spread_price / (h - l).replace(0, np.nan)
+        out["adf_stat_1m"] = ind.rolling_df_stat(c, 100)
 
     # --- RAW SMA inputs (operator override, 2026-06-13): UNNORMALIZED price-level
     # SMAs on 5m/30m/4H. SMA period 1 = price, so shifts 0-3 give a 4-tap price
@@ -196,17 +203,18 @@ class MarketMatrix:
     names: list                 # PRECOMPUTED_NAMES (market + market_raw) for telemetry
 
 
-def build_market_matrix(df_1m: pd.DataFrame) -> MarketMatrix:
+def build_market_matrix(df_1m: pd.DataFrame, point_size: float = 1e-5) -> MarketMatrix:
     """Compute the precomputed (action-independent) feature matrix from 1m bars.
 
-    Width = PRECOMPUTED_DIM (normalized `market` 89 + RAW `market_raw` 30 = 119 with
-    raw inputs on). Pure (no IO): used by tests and by ``precompute_symbol``.
+    Width = PRECOMPUTED_DIM (normalized `market` 92 + RAW `market_raw` 30 = 122 with
+    raw inputs on). ``point_size`` converts MT5 spread points -> price for the Spread
+    Filter ingredients. Pure (no IO): used by tests and by ``precompute_symbol``.
     Higher-TF features are as-of merged so row t only sees closed 5m/30m/4H bars.
     """
     frames = build_all_timeframes(df_1m)  # {1m,5m,30m,4H}
     cols = pd.DataFrame(index=df_1m.index)
 
-    one_min = _compute_tf_features(frames["1m"], "1m")
+    one_min = _compute_tf_features(frames["1m"], "1m", point_size=point_size)
     cols = cols.join(one_min)
     for tf in ("5m", "30m", "4H"):
         feat = _compute_tf_features(frames[tf], tf)
@@ -254,7 +262,7 @@ def precompute_symbol(symbol: str, force: bool = False) -> MarketMatrix:
         return MarketMatrix(mat, pd.DatetimeIndex(idx), valid_from, list(PRECOMPUTED_NAMES))
 
     df_1m, _ = load_symbol(symbol)
-    mm = build_market_matrix(df_1m)
+    mm = build_market_matrix(df_1m, point_size=cfg.POINT_SIZE.get(symbol, cfg.DEFAULT_POINT_SIZE))
     np.save(npy, mm.matrix)
     pd.DataFrame(index=mm.index).to_parquet(meta)
     return mm

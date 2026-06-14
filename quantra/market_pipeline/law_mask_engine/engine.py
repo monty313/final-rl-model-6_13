@@ -1,0 +1,193 @@
+"""LawMask engine — law states -> action mask (logit -1e9 on forbidden). 🔴
+
+WHAT THIS MODULE DOES
+---------------------
+Turns the 12 law/gate states (laws.py) plus the current position + slot occupancy
+into the additive direction mask over {HOLD, OPEN_LONG, OPEN_SHORT, CLOSE} and the
+pointer mask over the 5 slots. Forbidden actions get -1e9 so the policy can never
+sample them. Supports BOTH enforcement modes:
+
+  LIVE  — laws BAN directions (an active buy-law forbids OPEN_SHORT, etc.); gates ban
+          NEW opens when closed. Everything else is legal.
+  SCHOOL— curriculum permission mode: OPEN is allowed ONLY in the direction the
+          stage's required law(s) currently permit, and only when active.
+
+HOW IT SERVES REPEATED FTMO-STYLE PASSING
+-----------------------------------------
+This is the hard gate that mechanically prevents directional breaches: the policy
+cannot trade against the trend a law defines, and cannot open in dead/illiquid/
+wrong-regime conditions. The SAME masks run in training and live, so the discipline
+the bot learns transfers to passing real challenges. HOLD is never masked, so a legal
+action always exists.
+
+LLM RISK DOCTOR — HOW TO THINK ABOUT THIS FILE
+----------------------------------------------
+Rulebook: ``docs/MLP_INTERPRETABILITY_LAYER.md``. Always interpret the action
+distribution against this mask (Term 4): a 0.95 probability is meaningless if it was
+the only legal option. Mask Dependence = the pre-mask logits repeatedly favor an
+action this engine forbids; that's an actor problem, not a mask problem. The mask
+itself is correct by construction (tested). Never modify masks/sizing/walls.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional, Sequence
+
+import numpy as np
+
+from quantra.locked_core.laws.laws import GATES, LAW_NAMES, compute_law_states
+
+# Direction action indices (must match the PPOAgent direction head, M5).
+HOLD, OPEN_LONG, OPEN_SHORT, CLOSE = 0, 1, 2, 3
+N_DIR_ACTIONS = 4
+N_SLOTS = 5
+NEG = -1e9  # SOW C5: forbidden actions get logit = -1e9 before sampling
+
+# Position encodings.
+FLAT, LONG, SHORT = 0, 1, -1
+
+# Enforcement modes (THE_TRADING_CODE.md two-mode rule).
+MODE_LIVE = "live"
+MODE_SCHOOL = "school"
+
+_GATE_IDX = {name: 9 + i for i, name in enumerate(GATES)}  # gates are the last 3
+_LAW_IDX = {name: i for i, name in enumerate(LAW_NAMES)}
+
+
+@dataclass
+class MaskResult:
+    """Per-step mask + the inputs that produced it (logged for the Risk Doctor)."""
+
+    direction_mask: np.ndarray   # (4,) additive {0, -1e9}
+    pointer_mask: np.ndarray     # (5,) additive {0, -1e9}
+    law_states: np.ndarray       # (12,)
+    opens_allowed_by_gates: bool
+
+
+def _gates_allow_opens(states: np.ndarray, stationarity_mode: str) -> bool:
+    """Do the 3 gates permit NEW opens? Closed gate -> no new trades (mgmt unaffected)."""
+    atr_ok = states[_GATE_IDX["gate_atr_liquidity"]] == 1
+    spread_ok = states[_GATE_IDX["gate_spread"]] == 1
+    stat = states[_GATE_IDX["gate_stationarity"]]
+    if stationarity_mode == "A":          # trade only when stationary
+        stat_ok = stat == 1
+    elif stationarity_mode == "B":        # trade only when NOT stationary
+        stat_ok = stat == 0
+    else:                                  # gate disabled for this stage
+        stat_ok = True
+    return bool(atr_ok and spread_ok and stat_ok)
+
+
+def build_direction_mask(
+    law_states: np.ndarray,
+    position: int,
+    n_open: int,
+    mode: str = MODE_LIVE,
+    required_laws: Optional[Sequence[str]] = None,
+    stationarity_mode: str = "A",
+) -> np.ndarray:
+    """Additive direction mask (4,) of {0, -1e9}. HOLD is never masked.
+
+    Order of restriction: base position legality -> slot limits -> gates (ban opens)
+    -> directional laws (LIVE ban / SCHOOL permission). This mirrors SOW §2.3-2.4 +
+    THE_TRADING_CODE.md so the legal set is exactly what the blueprint prescribes.
+    """
+    mask = np.zeros(N_DIR_ACTIONS, dtype=np.float32)
+
+    # 1) Base position legality (SOW §2.3 action table).
+    if position == FLAT:
+        mask[CLOSE] = NEG                       # nothing to close
+    elif position == LONG:
+        mask[OPEN_SHORT] = NEG                  # CLOSE before reversing (no auto-reverse)
+    elif position == SHORT:
+        mask[OPEN_LONG] = NEG
+
+    # 2) Slot mechanics (SOW §2.4): OPEN masked when all 5 full; CLOSE masked when 0 open.
+    if n_open >= N_SLOTS:
+        mask[OPEN_LONG] = NEG
+        mask[OPEN_SHORT] = NEG
+    if n_open <= 0:
+        mask[CLOSE] = NEG
+
+    # 3) Gates: closed gate forbids NEW opens (open-position management unaffected).
+    if not _gates_allow_opens(law_states, stationarity_mode):
+        mask[OPEN_LONG] = NEG
+        mask[OPEN_SHORT] = NEG
+
+    # 4) Directional laws.
+    dir_states = law_states[:9]
+    if mode == MODE_LIVE:
+        # Each active law bans the OPPOSITE direction; bans accumulate (union).
+        if np.any(dir_states == 1):
+            mask[OPEN_SHORT] = NEG
+        if np.any(dir_states == -1):
+            mask[OPEN_LONG] = NEG
+    elif mode == MODE_SCHOOL:
+        # Permission mode: open ONLY in the direction the required law(s) allow, and
+        # only when active. No required law active (or conflict) -> no open permission.
+        req = required_laws or DIRECTIONAL_DEFAULT
+        permitted = set()
+        for name in req:
+            s = law_states[_LAW_IDX[name]]
+            if s == 1:
+                permitted.add(LONG)
+            elif s == -1:
+                permitted.add(SHORT)
+        if permitted != {LONG}:
+            mask[OPEN_LONG] = NEG
+        if permitted != {SHORT}:
+            mask[OPEN_SHORT] = NEG
+    else:
+        raise ValueError(f"unknown enforcement mode: {mode!r}")
+
+    mask[HOLD] = 0.0  # HOLD is always legal — a legal action always exists.
+    return mask
+
+
+def build_pointer_mask(occupied: Sequence[float]) -> np.ndarray:
+    """Additive pointer mask (5,): legal only on OCCUPIED slots (the CLOSE targets)."""
+    occ = np.asarray(occupied, dtype=np.float32).ravel()
+    mask = np.where(occ > 0.5, 0.0, NEG).astype(np.float32)
+    return mask
+
+
+# Default "required laws" if a school stage doesn't specify (all 9 directional laws).
+DIRECTIONAL_DEFAULT: List[str] = list(LAW_NAMES[:9])
+
+
+class LawMask:
+    """Convenience wrapper: market features -> law states -> masks (live or school)."""
+
+    def __init__(self, mode: str = MODE_LIVE, required_laws: Optional[Sequence[str]] = None,
+                 stationarity_mode: str = "A"):
+        self.mode = mode
+        self.required_laws = list(required_laws) if required_laws else None
+        self.stationarity_mode = stationarity_mode
+
+    def step(self, market_row: np.ndarray, position: int, occupied: Sequence[float]) -> MaskResult:
+        """Compute the full mask for one symbol at one bar."""
+        states = compute_law_states(np.asarray(market_row, dtype=np.float32))
+        n_open = int(np.sum(np.asarray(occupied) > 0.5))
+        dmask = build_direction_mask(
+            states, position, n_open, self.mode, self.required_laws, self.stationarity_mode
+        )
+        pmask = build_pointer_mask(occupied)
+        return MaskResult(dmask, pmask, states,
+                          _gates_allow_opens(states, self.stationarity_mode))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE LOG (IRAC) - standing rule since 2026-06-13. I/R/A/C; Conclusion is always
+# why this helps the bot pass FTMO consistently. Rulebook: docs/MLP_INTERPRETABILITY_LAYER.md
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-06-13] M3 — implemented the action-mask engine (both enforcement modes).
+#   I: Law states existed but nothing converted them into the -1e9 action mask, and
+#      nothing enforced the live-ban vs law-school-permission distinction.
+#   R: SOW C5 (logit -1e9), §2.3-2.4 (position/slot legality), THE_TRADING_CODE.md
+#      two-mode rule; HOLD always legal; gates ban new opens only.
+#   A: build_direction_mask (base legality -> slots -> gates -> laws, live or school)
+#      + build_pointer_mask (occupied slots only) + LawMask wrapper.
+#   C: Breach-bound and out-of-context directions are now mechanically impossible to
+#      sample, in both training and live, so the discipline transfers and the bot
+#      stops losing challenges to directional/regime mistakes.
