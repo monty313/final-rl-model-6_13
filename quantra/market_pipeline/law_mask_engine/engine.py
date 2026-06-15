@@ -38,10 +38,13 @@ import numpy as np
 
 from quantra.locked_core.laws.laws import GATES, LAW_NAMES, compute_law_states
 
-# Direction action indices (must match the PPOAgent direction head, M5).
+# Direction action indices. COUPLING [C2 in COUPLINGS.md]: these integer meanings are
+# assumed by ppo_agent.agent (direction head + OPEN/CLOSE gating), runtime.device
+# (RepresentativePolicy), env.trading_env._apply_action, and live_bridge.live_session.
+# Reorder here => the agent opens when it means to close. Change in ALL or none.
 HOLD, OPEN_LONG, OPEN_SHORT, CLOSE = 0, 1, 2, 3
-N_DIR_ACTIONS = 4
-N_SLOTS = 5
+N_DIR_ACTIONS = 4            # COUPLING: == ppo_agent direction head width + device mirror
+N_SLOTS = 5                 # COUPLING [C3]: re-exported from schema; pointer head width
 NEG = -1e9  # SOW C5: forbidden actions get logit = -1e9 before sampling
 
 # Position encodings.

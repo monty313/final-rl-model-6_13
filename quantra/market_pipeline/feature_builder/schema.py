@@ -141,8 +141,12 @@ def _law_names() -> List[str]:
     ]
 
 
+# COUPLING [C3 in COUPLINGS.md]: N_SLOTS is the source of truth for trade slots. It
+# sets the trade block width (7 x N_SLOTS = 35), the agent pointer head width, the
+# RepresentativePolicy pointer logits, and the env/live slot arrays. Change => update
+# ppo_agent, runtime.device, env.trading_env, execution_adapter, live_session, mask engine.
 N_SLOTS = 5
-_SLOT_FEATURES = ["dir", "upnl", "age", "entry_dist", "mfe", "mae", "occupied"]
+_SLOT_FEATURES = ["dir", "upnl", "age", "entry_dist", "mfe", "mae", "occupied"]  # 7 -> trade block
 
 
 def _trade_names() -> List[str]:

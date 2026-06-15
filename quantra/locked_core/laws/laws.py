@@ -41,11 +41,15 @@ from quantra.market_pipeline.feature_builder.schema import PRECOMPUTED_NAMES, SC
 
 # The 12 law/gate names, in schema `law` block order. compute_law_states returns
 # columns in exactly this order so they drop straight into the observation.
+# COUPLING [C4 in COUPLINGS.md]: this ORDER (9 directional then 3 gates) is sliced by
+# position in law_mask_engine (_GATE_IDX, law_states[:9]/[9:]) and mirrored in
+# schema._law_names. Reorder here => update schema._law_names + the mask engine.
 LAW_NAMES = list(SCHEMA.blocks["law"])
 DIRECTIONAL_LAWS = LAW_NAMES[:9]   # -1/0/+1
 GATES = LAW_NAMES[9:]              # 0/1
 
-# Column index of each precomputed feature name (laws read normalized features).
+# Column index of each precomputed feature name. COUPLING [C1]: this index map depends
+# on schema.PRECOMPUTED_NAMES ORDER; env._COL + scheduler._COL build the same map.
 _IDX = {name: i for i, name in enumerate(PRECOMPUTED_NAMES)}
 
 # +100 / -100 CCI thresholds on the RAW CCI value [operator decision 2026-06-13: CCI

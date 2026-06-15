@@ -50,6 +50,8 @@ from quantra.market_pipeline.feature_builder import PRECOMPUTED_DIM, assemble_st
 from quantra.market_pipeline.feature_builder.schema import N_SLOTS, PRECOMPUTED_NAMES
 
 # Feature column index by name (reward proxies read a couple of market features).
+# COUPLING [C1 in COUPLINGS.md]: depends on schema.PRECOMPUTED_NAMES ORDER (same map
+# laws._IDX + scheduler._COL build). A feature reorder invalidates these lookups.
 _COL = {name: i for i, name in enumerate(PRECOMPUTED_NAMES)}
 from quantra.market_pipeline.law_mask_engine.engine import (
     CLOSE,

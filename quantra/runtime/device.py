@@ -72,6 +72,9 @@ class RepresentativePolicy(nn.Module):
     cost to be representative, so weights are random and never saved.
     """
 
+    # COUPLING [C2/C3 in COUPLINGS.md]: these head widths MUST mirror the real
+    # ppo_agent.ActorCritic (direction 4, Beta size 2, pointer N_SLOTS=5). If the
+    # action space changes, update both — else the benchmark times the wrong shape.
     DIRECTION_ACTIONS = 4
     SIZE_PARAMS = 2
     N_SLOTS = 5

@@ -93,6 +93,9 @@ class ActorCritic(nn.Module):
             layers += [_orthogonal(nn.Linear(d, hidden), gain=2 ** 0.5), nn.Tanh()]
             d = hidden
         self.trunk = nn.Sequential(*layers)
+        # COUPLING [C2/C3 in COUPLINGS.md]: head widths == the action space. direction
+        # = N_DIR_ACTIONS (law_mask_engine), pointer = N_SLOTS (schema). runtime.device
+        # .RepresentativePolicy must mirror these. state_dim defaults to STATE_DIM [C1].
         self.direction_head = _orthogonal(nn.Linear(hidden, N_DIR_ACTIONS), gain=0.01)
         self.size_head = _orthogonal(nn.Linear(hidden, 2), gain=0.01)   # Beta a,b params
         self.pointer_head = _orthogonal(nn.Linear(hidden, N_SLOTS), gain=0.01)

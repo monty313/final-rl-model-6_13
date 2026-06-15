@@ -26,6 +26,9 @@ from __future__ import annotations
 
 import torch
 
+# COUPLING [C6 in COUPLINGS.md]: 🔴 hand-locked. The HPO (learning_system/hpo) must
+# NEVER include these in its search space (SOW G2/G6). If you ever touch them (needs
+# Monty), the "math of patience" the critic relies on changes everywhere downstream.
 GAMMA = 0.997   # 🔴 locked
 LAMBDA = 0.97   # 🔴 locked
 

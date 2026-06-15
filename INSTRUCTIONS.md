@@ -5,25 +5,23 @@ A running log of agreed-but-not-yet-built work, so nothing is lost between sessi
 
 ---
 
-## 1. OPEN — CCI multi-SMA-on-CCI refactor (awaiting operator sign-off) 🔴
-**Current state:** each CCI (periods 10/30/100, on 1m/5m/30m/4H) is compared to exactly
-**one** smoothed reference: `cci_dev = (CCI − SMA(CCI, 2) shifted 4) / 100`. Only one
-SMA length (2), one shift (4). No standalone SMA-on-CCI line, no explicit zero / ±100
-flags, no multi-SMA "continuous-trend" state.
+## 1. DONE — CCI kept RAW (operator final decision 2026-06-13, commit 389c35d) ✅
+Operator decided: do NOT normalize CCI. The observation now exposes the **raw CCI value**
+`cci{p}_{tf}` and the **raw shifted-forward SMA** `cci{p}_sma_{tf}` (period 2, shift 4) —
+no `/100`, no `(CCI−SMA)/100`. The applied SMA stays period 2 / shift 4 exactly; the laws
+read raw value vs raw SMA (legal space identical, Section F tests verify). STATE_DIM 179→167
+(the duplicate `raw_cci` block was removed). Snapshot re-pinned; 101 tests green.
 
-**Operator intent:** use *multiple* shifted SMA-on-CCI references to define **continuous-
-trend states** — "CCI moving farther from zero without breaking" — comparing CCI behaviour
-at different magnitudes and across timeframes.
+## 1b. DONE — cross-file coupling docs (commit pending) ✅
+Authoritative map in `COUPLINGS.md` (8 clusters) + inline `# COUPLING:` notes at the
+definition sites. Enforced by the change-impact tracker + the master suite.
 
-**Proposed smallest refactor (observation-only; laws/locked `cci_dev` UNCHANGED):**
-per (TF, CCI period) add shifted-SMA-on-CCI at lengths **{TO CONFIRM, e.g. 2 / 5 / 10}**
-(all shift 4) + a stacked **trend-state flag** (`+1` if CCI > SMA_short > SMA_mid > SMA_long
-and CCI>0; `-1` mirror; `0` otherwise) + explicit `cci_sign` and `cci_extreme` (±100) flags.
-Routes through `schema.py` → snapshot guard → `builder.py` (same pattern as the raw-input
-block). 🔴 CCI params are LOCKED → **needs explicit approval + the chosen SMA-length set
-before implementing.**
+## 2. PENDING REVIEW — Bollinger normalization
+Operator is reviewing Bollinger like CCI. Current: `boll_{band}_{tf} = (close − band)/ATR14`
+(bands = SMA ± 1·std, dev=1, population std; BB20/BB200 on 5m/30m/4H), clipped ±10. Await
+operator decision (keep normalized vs raw, like CCI) before any change.
 
-## 2. APPROVED — DEFERRED: MT5 demo launcher (build AFTER #1 is resolved)
+## 3. APPROVED — NEXT: MT5 demo launcher (now unblocked)
 Operator approved ("yes"). Add a **one-command** `live_bridge` launcher tying
 checkpoint + MT5 login + `LiveSession` + `MT5BarFeed` into a push-button **DEMO** run:
 - entry e.g. `python -m quantra.live_bridge.demo_launcher --login <id> --server <srv> --checkpoint <path> --symbols EURUSD,XAUUSD,GBPUSD,US30`

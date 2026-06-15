@@ -66,6 +66,11 @@ INTERPRETABILITY_RULEBOOK: Path = DOCS_DIR / "MLP_INTERPRETABILITY_LAYER.md"
 # owner mmayes313@gmail.com). The data_loader (M1) resolves bars in this order:
 # explicit local path -> Colab Drive mount -> gdown by these IDs.
 # ---------------------------------------------------------------------------
+# COUPLING [C5 in COUPLINGS.md]: every symbol in SYMBOLS must have an entry in each
+# per-symbol dict below (ASSET_CLASS, POINT_SIZE, CONTRACT_SIZE, SLIPPAGE_POINTS,
+# DRIVE_FILE_IDS, DRIVE_FILENAMES). Add a symbol => add it to ALL of them, or the
+# cost/risk/loader layers KeyError or mis-size. Consumers: cost_layer, risk_manager,
+# env, challenge_state, live_session, data_loader.
 SYMBOLS: List[str] = ["EURUSD", "XAUUSD", "GBPUSD", "US30"]  # SOW §12.1 order
 
 # Asset class drives the cost model (SOW §10.5): forex pays $5/RT/lot; metals &
