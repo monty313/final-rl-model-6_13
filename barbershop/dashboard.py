@@ -42,6 +42,8 @@
 #                            empty-day guard (was IndexError); plateau banner now
 #                            demonstrates; live refresh varies by tick; fail-loud
 #                            banner when the Doctor is asked with missing telemetry.
+#   [2026-06-15] [Claude] — Audit fix: __main__ now auto-opens the browser
+#                            (spec Section 0: "your browser will open automatically").
 # ==========================================================================
 
 from __future__ import annotations
@@ -504,4 +506,12 @@ def _register_callbacks(app: Dash) -> None:
 
 # Entry point: `python barbershop/dashboard.py` -> open http://localhost:8050.
 if __name__ == "__main__":          # pragma: no cover (manual launch only)
+    import webbrowser
+    url = f"http://{config.DASH_HOST}:{config.DASH_PORT}"
+    print(f"Quantra Barbershop -> {url}  (Ctrl+C to stop)")
+    # Open the browser automatically (spec Section 0: "your browser will open").
+    try:
+        webbrowser.open(url)
+    except Exception:                # headless / no browser -> just print the URL
+        pass
     make_app(use_mock=True).run(host=config.DASH_HOST, port=config.DASH_PORT, debug=False)
