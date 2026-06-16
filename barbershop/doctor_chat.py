@@ -16,6 +16,9 @@
 #                            top bar with Full Diagnosis, conversation area,
 #                            input, context indicator) + six-section response
 #                            formatter + approve/dismiss buttons.
+#   [2026-06-15] [Claude] — Adversarial-review fixes: segment response sections by
+#                            unique ICON (robust to paraphrase); added the
+#                            doctor-approve-status line for the [APPROVE] write path.
 # ==========================================================================
 
 from __future__ import annotations
@@ -140,6 +143,9 @@ def chat_panel(initial_screen_state: Dict[str, Any]) -> html.Div:
             html.Div(id="doctor-context-indicator",
                      children="Doctor is looking at: " + risk_doctor.context_label(initial_screen_state),
                      style={"fontSize": "11px", "color": "#888", "padding": "0 6px 6px"}),
+            # Confirmation line for the [✅ APPROVE] write path.
+            html.Div(id="doctor-approve-status",
+                     style={"fontSize": "11px", "color": "#1D9E75", "padding": "0 6px 6px"}),
         ], style={"display": "block"}),
     ], style={"position": "fixed", "bottom": "0", "right": "0", "width": "380px",
               "background": "#11151c", "color": "#ddd", "border": "1px solid #444",

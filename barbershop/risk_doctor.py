@@ -29,11 +29,18 @@
 #                            local LLM call w/ graceful offline, safety rules 6-8,
 #                            diagnosis log, fields-cited extraction, prescription
 #                            approval/export, full-diagnosis template.
+#   [2026-06-15] [Claude] — Adversarial-review anti-fabrication fixes: refuse to
+#                            diagnose with empty telemetry (no LLM call); force LOW +
+#                            UNVERIFIED when zero fields cited; drop all-NaN
+#                            placeholder columns from the packet + warn 'do not cite';
+#                            broaden RULE-7 live-trade detection (regex) without
+#                            refusing diagnostic questions about past trades.
 # ==========================================================================
 
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -129,8 +136,17 @@ def _screen_snapshot(screen_state: Dict[str, Any], trajectory: Optional[pd.DataF
         cols = ["step", "action", "action_prob", "advantage", "dd_buffer",
                 "pnl_cumulative", "reward"]
         present = [c for c in cols if c in tail.columns]
+        # ANTI-FABRICATION — drop placeholder columns that are ALL-NaN on this run
+        # (the live pipeline doesn't produce them yet) and tell the Doctor in plain
+        # text NOT to cite them, so a NaN can't be passed off as evidence.
+        unavailable = [c for c in present
+                       if c in config.PLACEHOLDER_FIELDS and tail[c].isna().all()]
+        present = [c for c in present if c not in unavailable]
         lines.append("Last trajectory rows for this day:")
         lines.append(tail[present].to_string(index=False))
+        if unavailable:
+            lines.append("UNAVAILABLE / placeholder fields (do NOT cite as evidence): "
+                         + ", ".join(unavailable))
     # SHAP for the selected trade: map the sequential trade_id -> its entry step,
     # then look up the SHAP row by (day, step).
     if (shap is not None and trade_id is not None and trajectory is not None
@@ -182,10 +198,32 @@ def context_label(screen_state: Dict[str, Any]) -> str:
 # ==========================================================================
 # SAFETY GUARDS (RULES 7 + 8).
 # ==========================================================================
+# Present-tense "act NOW" forms the literal trigger list can't enumerate. Tuned to
+# catch live-decision asks ("is now a good time to buy?", "should i be long here?")
+# WITHOUT refusing diagnostic questions about PAST trades ("why did it go long?").
+_LIVE_TRADE_RE = re.compile(
+    r"should i (go )?(long|short|buy|sell)\b"
+    r"|should i be (long|short)\b"
+    r"|\b(buy|sell|enter|long|short|entry)\b[^.?!]{0,25}\b(now|right now|today)\b"
+    r"|\bgood (time|entry)\b[^.?!]{0,25}\b(buy|sell|now|right now|today)\b"
+    r"|\benter (a )?(long|short)\b"
+    r"|close my (live )?position\b",
+    re.IGNORECASE,
+)
+
+
 def is_live_trade_question(question: str) -> bool:
-    """True if Monty's question asks for a live trade decision (RULE 7 trigger)."""
+    """True if Monty's question asks for a LIVE trade decision (RULE 7 trigger).
+
+    Reads: the question. Returns True for specific live-decision phrases (the
+    config trigger list) OR a present-tense "[action] now/here" regex match, so the
+    Doctor refuses to act as a signal source while still answering diagnostic
+    questions about what the bot DID in training.
+    """
     q = question.lower()
-    return any(trigger in q for trigger in config.LIVE_TRADE_TRIGGER_WORDS)
+    if any(trigger in q for trigger in config.LIVE_TRADE_TRIGGER_WORDS):
+        return True
+    return bool(_LIVE_TRADE_RE.search(q))
 
 
 def has_context(screen_state: Dict[str, Any]) -> bool:
@@ -246,6 +284,21 @@ def ask(question: str, screen_state: Dict[str, Any],
                 "fields_cited": [], "offline": False, "refused": False,
                 "manual_missing": False}
 
+    # ANTI-FABRICATION — a selected day with NO telemetry behind it cannot be
+    # diagnosed. Return "insufficient evidence" WITHOUT calling the LLM, so the
+    # Doctor never invents a diagnosis when real data is missing/unloaded.
+    day_id = screen_state.get("day_id")
+    no_data = trajectory is None or len(trajectory) == 0
+    if not no_data and day_id is not None:
+        no_data = trajectory[trajectory["day_id"] == day_id].empty
+    if no_data:
+        resp = {"text": config.DOCTOR_NO_EVIDENCE, "confidence": "LOW",
+                "fields_cited": [], "offline": False, "refused": False,
+                "manual_missing": False, "insufficient_evidence": True}
+        if log:
+            _log_exchange(question, resp, screen_state)
+        return resp
+
     packet = assemble_context_packet(question, screen_state, history, trajectory,
                                      shap, manual_text=manual_text,
                                      full_diagnosis=full_diagnosis)
@@ -268,9 +321,16 @@ def ask(question: str, screen_state: Dict[str, Any],
             _log_exchange(question, saved, screen_state)
         return offline_resp
 
-    resp = {"text": text, "confidence": extract_confidence(text),
-            "fields_cited": extract_fields_cited(text), "offline": False,
-            "refused": False, "manual_missing": False}
+    fields_cited = extract_fields_cited(text)
+    confidence = extract_confidence(text)
+    # ANTI-FABRICATION — an answer that cites ZERO telemetry fields is a hunch, not
+    # evidence (RULE 1). Force LOW confidence + a visible warning unless the model
+    # already said "insufficient evidence" itself.
+    if not fields_cited and "insufficient evidence" not in (text or "").lower():
+        text = config.DOCTOR_UNVERIFIED_PREFIX + (text or "")
+        confidence = "LOW"
+    resp = {"text": text, "confidence": confidence, "fields_cited": fields_cited,
+            "offline": False, "refused": False, "manual_missing": False}
     if log:
         _log_exchange(question, resp, screen_state)
     return resp

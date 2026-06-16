@@ -31,6 +31,10 @@
 #   [2026-06-15] [Claude] — First build. Maps artifacts/telemetry JSONL onto the
 #                            spec trajectory contract; flags advantage/SHAP/regime
 #                            as not-yet-produced; 1m->multi-TF price resampler.
+#   [2026-06-15] [Claude] — Adversarial-review fixes: key day packets in the same
+#                            1-based id space the steps look up (regime/pass_result
+#                            were silently lost); resample is in-memory by default
+#                            (RULE 3 — no write outside logs/ unless opted in).
 # ==========================================================================
 
 from __future__ import annotations
@@ -43,9 +47,10 @@ import pandas as pd
 
 from barbershop import config
 
-# Fields the live telemetry does NOT yet produce — the dashboard surfaces this
-# list so Monty knows exactly what is real vs placeholder when viewing a real run.
-NOT_YET_PRODUCED: List[str] = ["advantage", "shap_toward", "shap_away", "regime"]
+# Fields the live telemetry does NOT yet produce — the dashboard + Risk Doctor
+# surface this list so Monty knows exactly what is real vs placeholder on a real
+# run (single source of truth in config so both modules agree).
+NOT_YET_PRODUCED: List[str] = list(config.PLACEHOLDER_FIELDS)
 
 
 def list_real_runs(telemetry_dir: Optional[Path] = None) -> List[Path]:
@@ -103,8 +108,15 @@ def real_to_trajectory(records: List[dict]) -> pd.DataFrame:
       observation        -> obs_vector
     """
     steps = [r for r in records if r.get("kind") == "step"]
-    days = {d.get("day_id", d.get("episode_id")): d for r in records
-            for d in [r] if r.get("kind") == "day"}
+    # Key the day packets in the SAME 1-based id space the steps look up below
+    # (steps use day_id = episode_id + 1). A packet may carry an explicit 1-based
+    # day_id OR a 0-based episode_id; normalise both to the 1-based key so the
+    # lookup never silently misses (which would blank regime/pass_result).
+    days: Dict[int, dict] = {}
+    for r in records:
+        if r.get("kind") == "day":
+            key = int(r["day_id"]) if "day_id" in r else int(r.get("episode_id", -1)) + 1
+            days[key] = r
     law_names = _law_names()
     rows: List[Dict[str, Any]] = []
     for i, r in enumerate(steps):
@@ -168,15 +180,15 @@ def _masked_from_legal(legal: List[Any]) -> List[str]:
 
 
 def resample_prices_from_1m(src_1m_csv: Optional[Path] = None,
-                            out_dir: Optional[Path] = None) -> Dict[str, Path]:
-    """Build data/prices_{1m,5m,30m,4h}.csv from the real 1m MT5 export.
+                            out_dir: Optional[Path] = None) -> Dict[str, pd.DataFrame]:
+    """Resample the real 1m MT5 export into per-TF OHLC frames for Screen 3.
 
-    Reads: the 1m export (default data/raw/EURUSD_M1.csv) via the quantra loader
-    + resampler when available, else a plain pandas OHLC resample. Writes the four
-    spec CSVs so Screen 3 can render REAL candles. Returns {tf: path}.
+    Reads: the 1m export (default data/raw/EURUSD_M1.csv) via the quantra loader +
+    resampler when available, else a plain pandas OHLC resample. Returns a dict
+    {tf: DataFrame} IN MEMORY by default — RULE 3 forbids this read-only tool from
+    writing outside logs/. To cache on disk, pass an explicit out_dir (choose a
+    logs/ subdir); the frames are then also written there as prices_{tf}.csv.
     """
-    out_dir = Path(out_dir or config.DATA_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
     # Load 1m bars.
     try:
         from quantra.market_pipeline.data_loader import load_symbol
@@ -191,11 +203,12 @@ def resample_prices_from_1m(src_1m_csv: Optional[Path] = None,
     freq = {"1m": "1min", "5m": "5min", "30m": "30min", "4H": "4h"}
     name = {"1m": "prices_1m.csv", "5m": "prices_5m.csv",
             "30m": "prices_30m.csv", "4H": "prices_4h.csv"}
-    out: Dict[str, Path] = {}
+    out: Dict[str, pd.DataFrame] = {}
     for tf, fr in freq.items():
         res = df1.resample(fr).agg(agg).dropna().reset_index()
         res = res.rename(columns={res.columns[0]: "timestamp"})
-        p = out_dir / name[tf]
-        res.to_csv(p, index=False)
-        out[tf] = p
+        out[tf] = res
+        if out_dir is not None:                           # explicit opt-in disk cache only
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            res.to_csv(Path(out_dir) / name[tf], index=False)
     return out

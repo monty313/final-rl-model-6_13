@@ -13,6 +13,11 @@
 #                            format, missing manual, approve prescription,
 #                            context indicator, full diagnosis, no-execution,
 #                            history cap, diagnosis log, offline failure.
+#   [2026-06-15] [Claude] — Review fixes: de-vacuum TESTs 12/14/16/20 (body
+#                            routing, prescription content, all 7 template headers,
+#                            drop tautology); added TESTs 21-24 (no-context guard,
+#                            empty-telemetry anti-fabrication, zero-evidence
+#                            downgrade, RULE-7 paraphrase coverage).
 # ==========================================================================
 
 from __future__ import annotations
@@ -93,6 +98,13 @@ def test_response_renders_six_sections():
     assert len(sections) == 6
     icons = [s["icon"] for s in sections]
     assert icons == [icon for icon, _ in config.DOCTOR_SECTIONS]   # 📍🔍🎯✅❌📊 in order
+    # Body text must be routed to the CORRECT section (not just 6 headers present).
+    assert "advantage went negative" in sections[1]["body"]    # 🔍 What I see
+    assert sections[5]["body"].strip().endswith("MEDIUM")      # 📊 Confidence
+    # A response MISSING a section gets the 'insufficient evidence' fallback there.
+    partial = "📍 What I'm looking at: Screen 3.\n📊 Confidence: LOW"
+    psec = doctor_chat.format_sections(partial)
+    assert psec[2]["body"] == "insufficient evidence"          # 🎯 absent -> fallback
     component = doctor_chat.render_doctor_message({"text": GOOD_RESPONSE})
     flat = str(component)
     for icon, _ in config.DOCTOR_SECTIONS:
@@ -122,7 +134,9 @@ def test_approve_prescription_exports_and_flags(barbershop_tmp, mock_trajectory,
     out = risk_doctor.approve_prescription(q, resp["text"], SCREEN3)
     assert out.exists()                                        # suggested_rules.json written
     saved = json.loads(out.read_text(encoding="utf-8"))
-    assert saved[-1]["source"] == "risk_doctor" and saved[-1]["prescription"]
+    assert saved[-1]["source"] == "risk_doctor"
+    # The exported prescription is the ACTUAL 'What to do next' text, not the whole blob.
+    assert "increase the OPEN penalty" in saved[-1]["prescription"]
     # The matching diagnosis-log entry is now flagged exported.
     dinodes = risk_doctor.read_diagnoses()
     assert any(d["monty_question"] == q and d["prescription_exported"] for d in dinodes)
@@ -148,8 +162,8 @@ def test_full_diagnosis_includes_template(mock_trajectory):
         "full diagnosis", {"screen": 3, "day_id": 2, "trade_id": None}, history=[],
         trajectory=mock_trajectory, manual_text="MANUAL", full_diagnosis=True)
     for header in ("What happened", "Where the chain broke", "Failure classification",
-                   "Prescription", "Not recommended"):
-        assert header in packet["system"]                      # the 7-section template
+                   "Evidence cited", "Confidence", "Prescription", "Not recommended"):
+        assert header in packet["system"]                      # all 7 template sections
     client = MockLLM(GOOD_RESPONSE)
     resp = risk_doctor.ask("full diagnosis", {"screen": 3, "day_id": 2, "trade_id": None},
                            trajectory=mock_trajectory, client=client, full_diagnosis=True)
@@ -205,9 +219,59 @@ def test_offline_llm_graceful(barbershop_tmp, mock_trajectory):
     client = MockLLM(raise_exc=ConnectionError("server down"))
     resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=mock_trajectory, client=client)
     assert resp["offline"] is True
-    assert config.DASH_HOST or True                            # endpoint named in the message
-    assert config.DOCTOR_API_BASE in resp["text"]
+    assert config.DOCTOR_API_BASE in resp["text"]              # endpoint named in the message
     assert "temporarily offline" in resp["text"]
     # The question is saved with doctor_response == "OFFLINE".
     saved = risk_doctor.read_diagnoses()
     assert saved[-1]["doctor_response"] == config.DOCTOR_OFFLINE_RESPONSE
+
+
+# --------------------------------------------------------------------------
+# TEST 21 — RULE 8: no day/trade selected -> ask Monty to pick one, no LLM call.
+# --------------------------------------------------------------------------
+def test_no_context_guard(barbershop_tmp):
+    client = MockLLM(GOOD_RESPONSE)
+    resp = risk_doctor.ask("why?", {"screen": 1, "day_id": None, "trade_id": None}, client=client)
+    assert resp["text"] == config.DOCTOR_NO_CONTEXT
+    assert client.calls == 0
+
+
+# --------------------------------------------------------------------------
+# TEST 22 — anti-fabrication: a selected day with NO telemetry -> insufficient
+# evidence, the LLM is NOT called (the Doctor can't diagnose what it can't see).
+# --------------------------------------------------------------------------
+def test_empty_telemetry_refuses_to_fabricate(barbershop_tmp):
+    client = MockLLM(GOOD_RESPONSE)
+    resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=None, client=client)
+    assert resp.get("insufficient_evidence") is True
+    assert "insufficient evidence" in resp["text"].lower()
+    assert client.calls == 0                                   # no diagnosis without data
+
+
+# --------------------------------------------------------------------------
+# TEST 23 — anti-fabrication: an answer citing ZERO telemetry fields is forced
+# to LOW confidence and flagged UNVERIFIED.
+# --------------------------------------------------------------------------
+def test_zero_evidence_answer_is_downgraded(barbershop_tmp, mock_trajectory):
+    client = MockLLM("The model looked fine to me. Confidence: HIGH")   # cites no field
+    resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=mock_trajectory, client=client)
+    assert resp["fields_cited"] == []
+    assert resp["confidence"] == "LOW"                         # HIGH was overridden
+    assert "UNVERIFIED" in resp["text"]
+
+
+# --------------------------------------------------------------------------
+# TEST 24 — RULE 7 holds for PARAPHRASES, but diagnostic questions are answered.
+# --------------------------------------------------------------------------
+def test_live_trade_paraphrases_refused(barbershop_tmp):
+    client = MockLLM(GOOD_RESPONSE)
+    for q in ("Is now a good time to buy EURUSD?", "should I be long here?",
+              "do I enter a long position right now?", "should i short this?",
+              "is it a good entry right now?", "buy or sell right now?",
+              "should I close my live position?"):
+        resp = risk_doctor.ask(q, SCREEN3, client=client)
+        assert resp["refused"] is True, f"not refused: {q}"
+        assert resp["text"] == config.DOCTOR_REFUSAL_LIVE
+    assert client.calls == 0                                   # never reached the LLM
+    # A diagnostic question about a PAST trade is NOT refused.
+    assert risk_doctor.is_live_trade_question("why did the bot go long on day 2?") is False

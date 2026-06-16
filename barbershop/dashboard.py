@@ -36,6 +36,12 @@
 # UPDATE LOG — every change to this file must be logged here:
 #   [2026-06-15] [Claude] — First build. All 5 screens implemented per
 #                            Quantra Barbershop spec v1.0 + Risk Doctor chat box.
+#   [2026-06-15] [Claude] — Adversarial-review fixes: wired the APPLY/APPROVE/
+#                            MODIFY/IGNORE write-path callbacks (were dead);
+#                            marker-click now sets day_id so the autopsy opens;
+#                            empty-day guard (was IndexError); plateau banner now
+#                            demonstrates; live refresh varies by tick; fail-loud
+#                            banner when the Doctor is asked with missing telemetry.
 # ==========================================================================
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
+from dash import ALL, MATCH, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 from barbershop import config, data, doctor_chat, figures, risk_doctor
 
@@ -73,13 +79,21 @@ def load_bundle(use_mock: bool = True) -> Dict[str, Any]:
             "training_wall": _mock_training_wall()}
 
 
-def _mock_training_wall(n: int = 40) -> Dict[str, List[float]]:
-    """Synthesise a rising-then-plateauing pass-rate curve for Screen 1 mock mode."""
-    rng = np.random.default_rng(1)
+def _mock_training_wall(n: int = 40, seed: int = 1) -> Dict[str, List[float]]:
+    """Synthesise a rising-then-PLATEAUING pass-rate curve for Screen 1 mock mode.
+
+    Reads: nothing. Returns {iterations, pass_rate}. `seed` varies the curve so the
+    60s live refresh visibly moves; the last PLATEAU_CHECKPOINTS+1 points are pinned
+    flat (within tolerance) so figures.is_plateaued() is True and the plateau banner
+    actually demonstrates (the spec lists it; the original curve never triggered it).
+    """
+    rng = np.random.default_rng(seed)
     iters = list(range(0, n * 500, 500))
-    # Rise toward ~82% then flatten (so the plateau banner can demonstrate).
-    base = 82 * (1 - np.exp(-np.linspace(0, 3, n)))
+    base = 82 * (1 - np.exp(-np.linspace(0, 3, n)))      # rise toward ~82%
     rate = list(np.clip(base + rng.normal(0, 1.5, n), 0, 100))
+    flat = float(np.mean(rate[-(config.PLATEAU_CHECKPOINTS + 1):]))   # plateau value
+    for i in range(config.PLATEAU_CHECKPOINTS + 1):      # pin the tail flat
+        rate[-(i + 1)] = flat
     return {"iterations": iters, "pass_rate": [float(x) for x in rate]}
 
 
@@ -161,6 +175,10 @@ def screen_day_replay(bundle: Dict[str, Any], day_id: int, tf: str = "1m",
     (with trade overlays) + (on 1m only) the advantage strip + indicator heatmap.
     """
     traj = bundle["trajectory"]
+    day_rows = traj[traj["day_id"] == day_id]
+    if day_rows.empty:                                   # stale/out-of-range day_id
+        return html.Div([html.H3(f"Screen 3 — Day {day_id} Replay"),
+                         html.Div(f"No data for day {day_id}.")])
     trades = data.extract_trades(traj, day_id)
     # Centre the window on the selected trade's entry (or the first trade / day start).
     if trade_id is not None and 1 <= trade_id <= len(trades):
@@ -168,12 +186,12 @@ def screen_day_replay(bundle: Dict[str, Any], day_id: int, tf: str = "1m",
     elif trades:
         entry = trades[0]["entry_time"]
     else:
-        entry = traj[traj["day_id"] == day_id]["timestamp"].iloc[0]
+        entry = day_rows["timestamp"].iloc[0]
     window = data.timeframe_window(entry, tf)
-    # DD breach marker (if this day breached, mark the last breached bar).
-    day_rows = traj[traj["day_id"] == day_id]
-    breach_time = (day_rows[day_rows["dd_breached"]]["timestamp"].iloc[-1]
-                   if day_rows["dd_breached"].any() else None)
+    # DD breach marker (if this day breached, mark the FIRST breached bar — the
+    # collapse, not end-of-day).
+    breached_rows = day_rows[day_rows["dd_breached"]]
+    breach_time = breached_rows["timestamp"].iloc[0] if not breached_rows.empty else None
     candle = figures.candlestick_figure(bundle["prices"][tf], trades, tf, entry,
                                         window=window, dd_breach_time=breach_time)
     children = [
@@ -249,7 +267,10 @@ def screen_pattern_finder(bundle: Dict[str, Any]) -> html.Div:
         losing = data.make_mock_losing_trades()
     patterns = data.find_patterns(losing)
     blocks = [_pattern_block(p) for p in patterns]
-    return html.Div([html.H3("Screen 5 — Pattern Finder")] + blocks)
+    # Confirmation line for the [✅ APPLY RULE] export write path.
+    status = html.Div(id="pattern-export-status",
+                      style={"color": config.COLOR_GREEN, "fontWeight": "bold"})
+    return html.Div([html.H3("Screen 5 — Pattern Finder")] + blocks + [status])
 
 
 def _pattern_block(p: Dict[str, Any]) -> html.Div:
@@ -266,8 +287,9 @@ def _pattern_block(p: Dict[str, Any]) -> html.Div:
         ], style={"marginTop": "6px"}),
         dcc.Input(id={"type": "pattern-text", "index": p["rank"]}, value=p["suggested_rule"],
                   style={"width": "90%", "display": "none"}),
-    ], style={"border": f"1px solid {config.COLOR_GREY}", "borderRadius": "8px",
-              "padding": "10px", "margin": "8px 0"})
+    ], id={"type": "pattern-block", "index": p["rank"]},
+        style={"border": f"1px solid {config.COLOR_GREY}", "borderRadius": "8px",
+               "padding": "10px", "margin": "8px 0"})
 
 
 # ==========================================================================
@@ -284,6 +306,7 @@ def make_app(use_mock: bool = True) -> Dash:
 
     app.layout = html.Div([
         dcc.Store(id="screen-state", data=init_state),
+        dcc.Store(id="last-diagnosis", data=None),        # latest (q, text) for [APPROVE]
         html.H2("Quantra Barbershop — training diagnostics"),
         dcc.Tabs(id="screen-tabs", value="s1", children=[
             dcc.Tab(label="1 · Training Wall", value="s1"),
@@ -335,6 +358,7 @@ def _register_callbacks(app: Dash) -> None:
                   Input("replay-candles", "clickData"),
                   State("screen-state", "data"))
     def navigate(tab, card_clicks, tf_clicks, candle_click, state):
+        """Update screen-state from the triggering control and rebuild the content."""
         state = dict(state or {})
         trig = ctx.triggered_id
         if trig == "screen-tabs":
@@ -349,15 +373,18 @@ def _register_callbacks(app: Dash) -> None:
             cd = pts[0].get("customdata")
             if cd is not None:
                 tid = cd[0] if isinstance(cd, list) else cd
-                state.update(screen=4, trade_id=int(tid))
+                # Persist day_id (default to the replay's day 1) so the Screen-4 guard
+                # passes and the autopsy actually opens via the tab path.
+                state.update(screen=4, day_id=state.get("day_id") or 1, trade_id=int(tid))
         return state, _content_for(state)
 
     # --- Screen 1 live refresh (rebuild the training-wall curve). ---
     @app.callback(Output("training-wall-graph", "figure"),
                   Input("training-wall-interval", "n_intervals"),
                   prevent_initial_call=True)
-    def refresh_wall(_n):
-        tw = _mock_training_wall()
+    def refresh_wall(n):
+        """Rebuild the training-wall figure on each 60s interval tick (Screen 1 live)."""
+        tw = _mock_training_wall(seed=int(n or 0) + 1)    # vary by tick so it visibly moves
         return figures.training_wall_figure(tw["iterations"], tw["pass_rate"])
 
     # --- Doctor: expand/collapse the chat panel. ---
@@ -365,6 +392,7 @@ def _register_callbacks(app: Dash) -> None:
                   Input("doctor-toggle", "n_clicks"),
                   State("doctor-body", "style"))
     def toggle_doctor(n, style):
+        """Expand/collapse the Risk Doctor chat body on each tab click."""
         style = dict(style or {})
         style["display"] = "none" if (n or 0) % 2 == 1 else "block"
         return style
@@ -373,10 +401,12 @@ def _register_callbacks(app: Dash) -> None:
     @app.callback(Output("doctor-context-indicator", "children"),
                   Input("screen-state", "data"))
     def update_context(state):
+        """Refresh the 'Doctor is looking at: ...' indicator from screen-state."""
         return doctor_chat.context_indicator_text(state or {})
 
     # --- Doctor: send a message / full diagnosis -> append to the conversation. ---
     @app.callback(Output("doctor-conversation", "children"),
+                  Output("last-diagnosis", "data"),
                   Input("doctor-send", "n_clicks"),
                   Input("doctor-full-diagnosis", "n_clicks"),
                   State("doctor-input", "value"),
@@ -384,23 +414,92 @@ def _register_callbacks(app: Dash) -> None:
                   State("screen-state", "data"),
                   prevent_initial_call=True)
     def doctor_send(send_n, full_n, question, convo, state):
+        """Send Monty's question (or a full diagnosis) to the Doctor; append the reply."""
         convo = list(convo or [])
         full = ctx.triggered_id == "doctor-full-diagnosis"
         q = question or ("Give me a full diagnosis of this day." if full else "")
         if not q:
-            return convo
+            return convo, no_update
         try:
             bundle = load_bundle(use_mock=(state or {}).get("use_mock", True))
             traj, shap = bundle["trajectory"], bundle["shap"]
-        except data.MissingDataFile:
+            missing = None
+        except data.MissingDataFile as exc:
             traj = shap = None
-        resp = risk_doctor.ask(q, state or {}, trajectory=traj, shap=shap, full_diagnosis=full)
+            missing = exc
         convo.append(doctor_chat.render_user_message(q))
+        # If the telemetry is missing, fail loud (RULE 4) and do NOT diagnose.
+        if missing is not None:
+            convo.append(error_banner(missing))
+            return convo, no_update
+        resp = risk_doctor.ask(q, state or {}, trajectory=traj, shap=shap, full_diagnosis=full)
         if resp.get("offline") or resp.get("manual_missing"):
             convo.append(doctor_chat.render_offline_banner(resp["text"]))
-        else:
-            convo.append(doctor_chat.render_doctor_message(resp, msg_id=len(convo)))
-        return convo
+            return convo, no_update
+        convo.append(doctor_chat.render_doctor_message(resp, msg_id=len(convo)))
+        # Remember this exchange so [APPROVE] can export its prescription. Only real,
+        # evidence-backed diagnoses are approvable (not refusals / insufficient-evidence).
+        diag = no_update
+        if not resp.get("refused") and not resp.get("insufficient_evidence"):
+            diag = {"question": q, "text": resp["text"], "state": state}
+        return convo, diag
+
+    # --- Doctor: [✅ APPROVE] -> export the prescription to logs/suggested_rules.json. ---
+    @app.callback(Output("doctor-approve-status", "children"),
+                  Input({"type": "doctor-approve", "index": ALL}, "n_clicks"),
+                  State("last-diagnosis", "data"),
+                  State("screen-state", "data"),
+                  prevent_initial_call=True)
+    def approve_doctor(clicks, last, state):
+        """Export the latest Doctor prescription to suggested_rules.json (sanctioned write)."""
+        if not clicks or not any(clicks) or not last:
+            return no_update
+        path = risk_doctor.approve_prescription(last["question"], last["text"],
+                                                last.get("state") or state or {})
+        return f"✅ Prescription exported to {path}"
+
+    # --- Pattern Finder: [✅ APPLY RULE] -> export the (possibly edited) rule. ---
+    @app.callback(Output("pattern-export-status", "children"),
+                  Input({"type": "pattern-apply", "index": ALL}, "n_clicks"),
+                  State({"type": "pattern-text", "index": ALL}, "value"),
+                  State("screen-state", "data"),
+                  prevent_initial_call=True)
+    def apply_pattern(clicks, texts, state):
+        """Export the clicked pattern (with any MODIFY edit) to suggested_rules.json."""
+        if not clicks or not any(clicks):
+            return no_update
+        rank = ctx.triggered_id["index"]                  # which pattern's APPLY fired
+        bundle = load_bundle(use_mock=(state or {}).get("use_mock", True))
+        losing = data.losing_trades(bundle["trajectory"])
+        if len(losing) < 3:
+            losing = data.make_mock_losing_trades()
+        patterns = data.find_patterns(losing)
+        match = next((p for p in patterns if p["rank"] == rank), None)
+        if match is None:
+            return no_update
+        # Use the edited text if MODIFY revealed the input and changed it.
+        edited = texts[rank - 1] if texts and rank - 1 < len(texts) else None
+        entry = {"source": "pattern_finder", **match}
+        if edited:
+            entry["suggested_rule"] = edited
+        path = data.export_rule(entry)
+        return f"✅ Rule exported to {path}"
+
+    # --- Pattern Finder: [✏️ MODIFY] reveals the editable rule text. ---
+    @app.callback(Output({"type": "pattern-text", "index": MATCH}, "style"),
+                  Input({"type": "pattern-modify", "index": MATCH}, "n_clicks"),
+                  prevent_initial_call=True)
+    def modify_pattern(_n):
+        """Reveal the hidden rule-text input so Monty can edit before exporting."""
+        return {"width": "90%", "display": "block"}
+
+    # --- Pattern Finder: [❌ IGNORE] hides the pattern card. ---
+    @app.callback(Output({"type": "pattern-block", "index": MATCH}, "style"),
+                  Input({"type": "pattern-ignore", "index": MATCH}, "n_clicks"),
+                  prevent_initial_call=True)
+    def ignore_pattern(_n):
+        """Hide a dismissed pattern card."""
+        return {"display": "none"}
 
 
 # Entry point: `python barbershop/dashboard.py` -> open http://localhost:8050.

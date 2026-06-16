@@ -11,6 +11,9 @@
 #                            timeframe windows, advantage alignment, heatmap
 #                            colours, autopsy panels, SHAP, pattern finder,
 #                            missing-file banner, higher-TF vertical line.
+#   [2026-06-15] [Claude] — Review fixes: de-vacuum TESTs 4/5/7/8 (exact window,
+#                            ATR danger branch, real SHAP truncation, specificity
+#                            tiebreak); added plateau-banner + write-path-wiring tests.
 # ==========================================================================
 
 from __future__ import annotations
@@ -79,11 +82,14 @@ def test_advantage_strip_aligns_with_candles(mock_trajectory, mock_prices):
     candle = figures.candlestick_figure(mock_prices["1m"], trades, "1m", entry, window=window)
     adv = data.advantage_series(mock_trajectory, day_id)
     adv_fig = figures.advantage_figure(adv, window=window)
-    # Same x-axis range on both panels (shared time axis -> no off-by-one).
-    assert list(candle.layout.xaxis.range) == list(adv_fig.layout.xaxis.range)
-    # Every advantage timestamp inside the window exists in the 1m candle series.
+    # Each panel is pinned to the EXACT expected window (not just equal to each other).
+    assert [pd.Timestamp(x) for x in candle.layout.xaxis.range] == [window[0], window[1]]
+    assert [pd.Timestamp(x) for x in adv_fig.layout.xaxis.range] == [window[0], window[1]]
+    # Every advantage timestamp inside the window exists in the 1m candle series
+    # (and there IS at least one, so the subset check isn't vacuously true).
     candle_times = set(pd.to_datetime(mock_prices["1m"]["timestamp"], utc=True))
     in_window = adv[(adv["timestamp"] >= window[0]) & (adv["timestamp"] <= window[1])]
+    assert len(in_window) > 0
     assert set(in_window["timestamp"]).issubset(candle_times)
 
 
@@ -94,6 +100,13 @@ def test_heatmap_colour_assignment():
     assert data.cell_color("challenge_health", "dd_buffer", 0.15) == config.COLOR_RED
     assert data.cell_color("volatility", "atr_level_1m", 0.0003) == config.COLOR_YELLOW
     assert data.cell_color("laws_gates", "law_super_trend_bb", "ACTIVE") == config.COLOR_GREEN
+    # Exercise the volatility DANGER branch the heatmap exists to flag: a >1.3x ATR
+    # spike vs the day average is RED; just below threshold stays YELLOW.
+    assert data.cell_color("volatility", "atr_level_1m", 0.0010, daily_atr_avg=0.0005) == config.COLOR_RED
+    assert data.cell_color("volatility", "atr_level_1m", 0.0006, daily_atr_avg=0.0005) == config.COLOR_YELLOW
+    # DD buffer just below the green threshold is YELLOW (borderline), healthy is GREEN.
+    assert data.cell_color("challenge_health", "dd_buffer", 0.40) == config.COLOR_YELLOW
+    assert data.cell_color("challenge_health", "dd_buffer", 0.80) == config.COLOR_GREEN
 
 
 # --------------------------------------------------------------------------
@@ -128,13 +141,17 @@ def test_shap_panel_sorted_and_grouped():
         "shap_toward": {"cci10_5m": 0.5, "boll_bb20_up_5m": 0.3, "ssma_align_5m": 0.1},
         "shap_away": {"atr_level_1m": 0.4, "tw_cci_block": 0.2},
     })
-    s = data.shap_sorted(shap_row, "OPEN_SHORT")
+    s = data.shap_sorted(shap_row, "OPEN_SHORT")               # top_k=5 -> all shown
     assert len(s["toward"]) == 3 and len(s["away"]) == 2
     toward_vals = [v for _, v in s["toward"]]
     away_vals = [v for _, v in s["away"]]
     assert toward_vals == sorted(toward_vals, reverse=True)    # toward sorted descending
     assert away_vals == sorted(away_vals, reverse=True)        # away sorted descending
-    assert s["explained"] > 0                                  # explained variance shown
+    # explained is a REAL fraction: all 5 contributors shown -> 100%; truncating to
+    # top_k=2 must genuinely LOWER it below 100% (not a hardcoded stub).
+    assert abs(s["explained"] - 100.0) < 1e-6
+    s2 = data.shap_sorted(shap_row, "OPEN_SHORT", top_k=2)
+    assert 0 < s2["explained"] < 100.0
     fig = figures.shap_figure(s)                               # renders without error
     assert len(fig.data) == 2                                  # toward + away groups
 
@@ -146,7 +163,11 @@ def test_pattern_finder_detects_and_exports(barbershop_tmp):
     losing = data.make_mock_losing_trades(n=12, n_with_pattern=8)
     patterns = data.find_patterns(losing)
     assert patterns[0]["count"] == 8 and patterns[0]["total"] == 12
-    assert patterns[0]["suggested_rule"]                       # non-empty prescription text
+    # The specificity tiebreak must rank the 2-factor pattern first (most useful),
+    # not a 1-factor pattern that ties on count.
+    assert patterns[0]["key"] == "dd_low_and_atr_high"
+    assert len(patterns[0]["conditions"]) == 2
+    assert "DD" in patterns[0]["suggested_rule"] and "ATR" in patterns[0]["suggested_rule"]
     # [APPLY RULE] exports to logs/suggested_rules.json.
     out = data.export_rule({"source": "pattern_finder", **patterns[0]})
     assert out.exists()
@@ -185,3 +206,27 @@ def test_higher_tf_vertical_entry_line(mock_trajectory, mock_prices):
     win1 = data.timeframe_window(entry, "1m")
     fig1 = figures.candlestick_figure(mock_prices["1m"], trades, "1m", entry, window=win1)
     assert not [s for s in fig1.layout.shapes if s.type == "line"]
+
+
+# --------------------------------------------------------------------------
+# EXTRA — Screen 1 plateau banner actually renders on a flat curve.
+# --------------------------------------------------------------------------
+def test_plateau_banner_renders_on_flat_curve():
+    assert figures.is_plateaued([81.0, 81.2, 80.9, 81.1]) is True     # flat -> plateau
+    assert figures.is_plateaued([10.0, 40.0, 70.0, 95.0]) is False    # rising -> not
+    # The shipped mock curve is flattened at the tail, so the banner is present.
+    bundle = dashboard.load_bundle(use_mock=True)
+    screen = dashboard.screen_training_wall(bundle)
+    assert "plateau-banner" in str(screen)
+    assert "plateau detected" in str(screen).lower()
+
+
+# --------------------------------------------------------------------------
+# EXTRA — the sanctioned write-path callbacks (APPLY / APPROVE) are actually wired.
+# (The review found these buttons had NO callbacks — the only write path was dead.)
+# --------------------------------------------------------------------------
+def test_write_path_callbacks_are_registered():
+    app = dashboard.make_app(use_mock=True)
+    keys = " ".join(app.callback_map.keys())
+    assert "pattern-export-status" in keys      # [APPLY RULE] -> export_rule is wired
+    assert "doctor-approve-status" in keys       # [APPROVE] -> approve_prescription is wired

@@ -18,6 +18,11 @@
 #                            and all Screen 1-5 transforms (scoreboard, TF
 #                            windows, heatmap colours, advantage, autopsy, SHAP,
 #                            pattern finder, rule export).
+#   [2026-06-15] [Claude] — Adversarial-review fixes: bank realised trade_pnl on
+#                            the CLOSE bar (was lost), real SHAP explained-ratio,
+#                            enrich losing_trades with atr_ratio + adv_neg_within_3
+#                            so all pattern predicates work on real runs, mark
+#                            dd_breached only on collapse bars, +__init__ docstring.
 # ==========================================================================
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ class MissingDataFile(Exception):
     """Raised when a required input file is absent. Carries the path + producer."""
 
     def __init__(self, path: Path, producer: str):
+        """Store the missing path + its producer and build the fail-loud message."""
         self.path = Path(path)            # the file we looked for
         self.producer = producer          # the module/step that creates it
         super().__init__(
@@ -141,23 +147,34 @@ def make_mock_trajectory(seed: int = 0, days: int = 4) -> pd.DataFrame:
         open_steps = {3, 8} if di != 2 else {2, 6, 10}   # the breach day trades more
         trade_open = False
         trade_dir = "NONE"
+        pending_realized = 0.0    # the active trade's realised P&L, banked on CLOSE
         for s in range(steps_per_day):
             ts = day_start + pd.Timedelta(minutes=s * 7)   # 7-min spacing
             # Drift P&L toward the planned day result; the breach day dives late.
             pnl += day_pnl / steps_per_day + rng.normal(0, 0.05)
-            if breached and s >= steps_per_day - 4:
+            collapse = breached and s >= steps_per_day - 4   # the late-day wall-hit bars
+            if collapse:
                 pnl -= 1.1         # the late-day collapse that hits the wall
             dd_buffer = float(np.clip(1.0 + min(pnl, 0.0) / config.DD_WALL_PCT, 0.0, 1.0))
             # Action selection: open on open_steps, close 2 steps later, else hold.
+            # trade_pnl convention: 0 while flat / on the OPEN bar; the running
+            # unrealised P&L while holding; and the REALISED result on the CLOSE bar
+            # (so extract_trades + losing_trades, which read the CLOSE row, are correct).
             action = "HOLD"
+            row_trade_pnl = 0.0
             if s in open_steps and not trade_open:
                 action = "OPEN_LONG" if rng.random() > 0.5 else "OPEN_SHORT"
                 trade_open = True
                 trade_dir = "LONG" if action == "OPEN_LONG" else "SHORT"
+                # Decide this trade's realised outcome now (negative-biased on breach days).
+                pending_realized = float(rng.normal(-10 if breached else 7, 12))
             elif trade_open and (s - 2) in open_steps:
                 action = "CLOSE"
                 trade_open = False
                 trade_dir = "NONE"
+                row_trade_pnl = pending_realized          # bank the realised P&L on CLOSE
+            elif trade_open:
+                row_trade_pnl = float(pending_realized * 0.5)  # partial unrealised while held
             # Probabilities over [long, short, hold, close]; chosen action peaks.
             probs = _probs_for(action, rng)
             masked = _masked_for(action, trade_open)
@@ -165,7 +182,6 @@ def make_mock_trajectory(seed: int = 0, days: int = 4) -> pd.DataFrame:
             adv = float(rng.normal(0.1, 0.3))
             if breached and s >= steps_per_day - 5:
                 adv = float(-abs(rng.normal(0.6, 0.2)))   # critic-beating turns sour
-            trade_pnl = float(rng.normal(-8 if breached else 6, 12)) if trade_open else 0.0
             rows.append({
                 "timestamp": ts,
                 "day_id": di,
@@ -181,12 +197,15 @@ def make_mock_trajectory(seed: int = 0, days: int = 4) -> pd.DataFrame:
                 "dd_buffer": dd_buffer,
                 "trade_open": bool(trade_open),
                 "trade_direction": trade_dir,
-                "trade_pnl": trade_pnl,
+                "trade_pnl": row_trade_pnl,
                 "law_state": _mock_law_state(rng),
                 "obs_vector": [float(x) for x in rng.normal(0, 1, len(MOCK_FEATURE_NAMES))],
                 "regime": regime,
                 "pass_result": bool(passed),
-                "dd_breached": bool(breached),
+                # dd_breached marks ONLY the collapse bars (where the buffer hits the
+                # wall), so the dashboard's breach line lands on the collapse, not
+                # end-of-day. day_scoreboard still flags the day via .any().
+                "dd_breached": bool(collapse),
             })
     return pd.DataFrame(rows)
 
@@ -614,12 +633,16 @@ def shap_sorted(shap_row: pd.Series, chosen_action: str,
     {toward:[(name,val)], away:[(name,val)], explained: float} with each list
     sorted largest-first and truncated to top_k (spec TEST 7).
     """
-    toward = sorted(dict(shap_row.get("shap_toward", {})).items(),
-                    key=lambda kv: kv[1], reverse=True)[:top_k]
-    away = sorted(dict(shap_row.get("shap_away", {})).items(),
-                  key=lambda kv: kv[1], reverse=True)[:top_k]
-    total = sum(v for _, v in toward) + sum(v for _, v in away)
-    explained = 100.0 if total <= 0 else 100.0       # mock SHAP sums to ~100% explained
+    toward_all = sorted(dict(shap_row.get("shap_toward", {})).items(),
+                        key=lambda kv: kv[1], reverse=True)
+    away_all = sorted(dict(shap_row.get("shap_away", {})).items(),
+                      key=lambda kv: kv[1], reverse=True)
+    toward, away = toward_all[:top_k], away_all[:top_k]
+    # REAL explained fraction: how much of the TOTAL attribution magnitude is carried
+    # by the shown top-k bars (so truncating to top_k genuinely lowers the percentage).
+    total = sum(v for _, v in toward_all) + sum(v for _, v in away_all)
+    shown = sum(v for _, v in toward) + sum(v for _, v in away)
+    explained = 0.0 if total <= 0 else 100.0 * shown / total
     return {"chosen_action": chosen_action, "toward": toward, "away": away,
             "explained": explained}
 
@@ -661,13 +684,63 @@ _PATTERN_RULES = {
 
 
 def losing_trades(trajectory: pd.DataFrame) -> pd.DataFrame:
-    """Extract losing trades (advantage < 0 AND trade closed at a loss) from a trajectory.
+    """Extract losing trades (advantage < 0 AND trade closed at a loss), ENRICHED.
 
-    Reads: a trajectory DataFrame. Returns the CLOSE rows that lost money while
-    the critic was beaten (advantage < 0) — the Pattern Finder's input set.
+    Reads: a trajectory DataFrame. Returns the CLOSE rows that lost money while the
+    critic was beaten (advantage < 0), each enriched with the derived predicate
+    columns the Pattern Finder needs so ALL conditions work on REAL trajectories
+    (not just the mock-loser fixture):
+      - atr_ratio        = the bar's ATR feature / that day's mean ATR feature
+      - adv_neg_within_3 = did advantage go negative within 3 steps after entry
+    Missing ingredients degrade gracefully (atr_ratio defaults to 1.0).
     """
-    closes = trajectory[trajectory["action"] == "CLOSE"].copy()
-    return closes[(closes["advantage"] < 0) & (closes["trade_pnl"] < 0)].reset_index(drop=True)
+    closes = trajectory[(trajectory["action"] == "CLOSE")
+                        & (trajectory["advantage"] < 0)
+                        & (trajectory["trade_pnl"] < 0)].copy()
+    if closes.empty:
+        return closes.reset_index(drop=True)
+
+    # Locate an ATR-like feature in the observation to build atr_ratio.
+    atr_idx = next((i for i, n in enumerate(MOCK_FEATURE_NAMES) if n.startswith("atr")), None)
+
+    def _atr_value(row) -> float:
+        obs = list(row.get("obs_vector", []))
+        return abs(float(obs[atr_idx])) if (atr_idx is not None and atr_idx < len(obs)) else float("nan")
+
+    # Per-day mean ATR feature (the denominator for atr_ratio).
+    day_atr_mean: Dict[int, float] = {}
+    for day_id, g in trajectory.groupby("day_id"):
+        vals = [_atr_value(r) for _, r in g.iterrows()]
+        vals = [v for v in vals if v == v]                # drop NaN
+        day_atr_mean[int(day_id)] = (sum(vals) / len(vals)) if vals else 1.0
+
+    atr_ratios, adv_flags = [], []
+    for _, close in closes.iterrows():
+        day_id = int(close["day_id"])
+        mean = day_atr_mean.get(day_id, 1.0) or 1.0
+        a = _atr_value(close)
+        atr_ratios.append((a / mean) if (a == a and mean) else 1.0)
+        # advantage in the 3 steps AFTER this trade's entry (its matching OPEN).
+        adv_flags.append(_advantage_dipped_after_entry(trajectory, close))
+    closes["atr_ratio"] = atr_ratios
+    closes["adv_neg_within_3"] = adv_flags
+    return closes.reset_index(drop=True)
+
+
+def _advantage_dipped_after_entry(trajectory: pd.DataFrame, close_row: pd.Series) -> bool:
+    """True if advantage went negative within 3 steps after this trade's entry step."""
+    day = trajectory[trajectory["day_id"] == close_row["day_id"]].sort_values("step")
+    trades = extract_trades(trajectory, int(close_row["day_id"]))
+    # Match this CLOSE to its trade by exit timestamp, then read its entry step.
+    match = next((t for t in trades if t["exit_time"] == close_row["timestamp"]), None)
+    if match is None:
+        return False
+    entry_rows = day[day["timestamp"] == match["entry_time"]]
+    if entry_rows.empty:
+        return False
+    entry_step = int(entry_rows.iloc[0]["step"])
+    window = day[(day["step"] > entry_step) & (day["step"] <= entry_step + 3)]
+    return bool((window["advantage"] < 0).any())
 
 
 def find_patterns(losing: pd.DataFrame, max_patterns: int = 3) -> List[Dict[str, Any]]:

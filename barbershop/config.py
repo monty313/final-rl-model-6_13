@@ -34,6 +34,10 @@
 #   [2026-06-15] [Claude] — First build. Constants for Barbershop v1.0 +
 #                            Risk Doctor continuation v1.0. Paths reconciled
 #                            against the real Quantra repo (see note above).
+#   [2026-06-15] [Claude] — Adversarial-review fixes: added PLACEHOLDER_FIELDS
+#                            (anti-fabrication), DOCTOR_NO_EVIDENCE +
+#                            DOCTOR_UNVERIFIED_PREFIX, and made
+#                            LIVE_TRADE_TRIGGER_WORDS specific (no false refusals).
 # ==========================================================================
 
 from __future__ import annotations
@@ -144,6 +148,11 @@ PLATEAU_CHECKPOINTS: int = 3             # flat for this many checkpoints -> ban
 # close] (spec Section 4). The live engine uses ints {HOLD:0, OPEN_LONG:1,
 # OPEN_SHORT:2, CLOSE:3} — adapter.py maps between the two.
 # --------------------------------------------------------------------------
+# Contract fields the LIVE telemetry pipeline does NOT yet produce — they appear
+# as NaN/placeholder on real runs. The Risk Doctor flags these as "do not cite as
+# evidence" so a fabricated NaN can never be passed off as a real metric.
+PLACEHOLDER_FIELDS: list[str] = ["advantage", "shap_toward", "shap_away", "regime"]
+
 ACTIONS: list[str] = ["OPEN_LONG", "OPEN_SHORT", "HOLD", "CLOSE"]
 ACTION_ICONS: dict[str, str] = {
     "OPEN_LONG": "⬆️",   # up arrow
@@ -223,6 +232,15 @@ DOCTOR_MANUAL_MISSING: str = (
     "This file is required for the Doctor to operate correctly."
 )
 DOCTOR_NO_CONTEXT: str = "Please select a day or trade first so I can see what you're looking at."
+DOCTOR_NO_EVIDENCE: str = (
+    "Insufficient evidence - no telemetry is loaded for the selected day, so I cannot "
+    "diagnose it without guessing. Load a training run (logs/trajectory.parquet) first."
+)
+# Prepended to any LLM answer that cites zero telemetry fields (anti-fabrication).
+DOCTOR_UNVERIFIED_PREFIX: str = (
+    "⚠️ UNVERIFIED - this answer cited no telemetry field, so treat it as a hunch, "
+    "not evidence. (Confidence forced to LOW.)\n\n"
+)
 
 # The six display sections the chat box renders (icon, heading). The Doctor's
 # free text is parsed/segmented into these; tests assert all six icons appear.
@@ -235,8 +253,13 @@ DOCTOR_SECTIONS: list[tuple[str, str]] = [
     ("\U0001f4ca", "Confidence"),               # 📊
 ]
 
-# Words that, if present in Monty's question, trip RULE 7 (no execution authority).
+# Phrases that, if present in Monty's question, trip RULE 7 (no execution authority).
+# Deliberately specific (e.g. "should i go long", NOT bare "go long") so DIAGNOSTIC
+# questions about PAST trades ("why did the bot go long on day 2?") are NOT refused;
+# is_live_trade_question() adds a regex for present-tense "[action] now/here" forms.
 LIVE_TRADE_TRIGGER_WORDS: tuple[str, ...] = (
-    "go long", "go short", "should i buy", "should i sell", "enter now",
-    "open a trade now", "place a trade", "take this trade now",
+    "should i go long", "should i go short", "should i buy", "should i sell",
+    "should i be long", "should i be short", "go long now", "go short now",
+    "enter now", "open a trade now", "place a trade", "take this trade now",
+    "good time to buy", "good time to sell", "close my live position",
 )
