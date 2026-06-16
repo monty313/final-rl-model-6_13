@@ -1,6 +1,6 @@
 # Barbershop Remediation Plan
 
-**Created:** 2026-06-16 · **Owner:** Claude (for Monty) · **Status:** IN PROGRESS
+**Created:** 2026-06-16 · **Owner:** Claude (for Monty) · **Status:** COMPLETE (all 8 items)
 
 This plan fixes every issue raised in the 2026-06-16 mentor review of `barbershop/`.
 The driving principle is the one the review ended on: **stop showing placeholder data as
@@ -104,7 +104,9 @@ even on a real run and its "live refresh" reseeds noise.
 (no fabricated "live" claim on real data).
 **Acceptance.** Mock bundle built once; Screen 1 on a real run is labelled demo (or shows a
 real series when present); a test covers the label/real-series branch.
-**Status:** [ ]
+**Status:** [x] DONE 2026-06-16 — mock bundle memoised (built once); Screen 1 shows an honest
+"Demo curve" note + disables the 60s "live" tick unless a real pass-rate sidecar
+(<run>_passrate.json) is present (adapter.load_passrate hook). Tests added.
 
 ---
 
@@ -116,7 +118,7 @@ real series when present); a test covers the label/real-series branch.
 - [x] WI-5 Risk Doctor context budget
 - [x] WI-6 Robust Doctor parsing
 - [x] WI-7 Single contract source
-- [ ] WI-8 Perf + Screen-1 honesty
+- [x] WI-8 Perf + Screen-1 honesty
 
 ## Update log
 - [2026-06-16] [Claude] — Plan created from the mentor review. 8 work items, ordered by severity.

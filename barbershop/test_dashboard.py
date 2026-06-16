@@ -31,6 +31,33 @@ from barbershop import config, data, dashboard, figures
 # --------------------------------------------------------------------------
 # TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC.
 # --------------------------------------------------------------------------
+def test_mock_bundle_memoised_and_screen1_honest():
+    """WI-8 — mock bundle built once; Screen 1 labels demo vs real honestly."""
+    dashboard._MOCK_BUNDLE = None                          # reset the cache for this test
+    b1 = dashboard.load_bundle(source="mock")
+    b2 = dashboard.load_bundle(source="mock")
+    assert b1 is b2                                        # memoised — not rebuilt every call
+    assert b1["training_wall_real"] is False
+    # A demo (non-real) curve shows the honest demo note, not a bare "live" claim.
+    s = str(dashboard.screen_training_wall(b1))
+    assert "Demo curve" in s
+    # A bundle WITH a real pass-rate series is labelled real (no demo note).
+    real_b = dict(b1); real_b["training_wall_real"] = True
+    assert "real training run" in str(dashboard.screen_training_wall(real_b))
+
+
+def test_adapter_loads_passrate_sidecar(tmp_path):
+    """WI-8 — a real pass-rate sidecar loads; its absence returns None (-> demo curve)."""
+    from barbershop import adapter
+    run = tmp_path / "r.jsonl"
+    run.write_text("{}", encoding="utf-8")
+    assert adapter.load_passrate(run) is None             # no sidecar -> demo
+    (tmp_path / "r_passrate.json").write_text(
+        json.dumps({"iterations": [0, 1], "pass_rate": [10, 20]}), encoding="utf-8")
+    pr = adapter.load_passrate(run)
+    assert pr["iterations"] == [0, 1] and pr["pass_rate"] == [10.0, 20.0]
+
+
 def test_contract_is_single_source_of_truth():
     """WI-7 — config + data reference the one contract module (no drift between them)."""
     from barbershop import contract

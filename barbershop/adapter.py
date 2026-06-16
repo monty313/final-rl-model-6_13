@@ -42,6 +42,8 @@
 #   [2026-06-16] [Claude] — WI-3: load_attribution() reads the input-gradient sidecar
 #                            into the SHAP columns; list_real_runs() excludes the
 #                            *_attribution.jsonl sidecar so it's never read as a run.
+#   [2026-06-16] [Claude] — WI-8: load_passrate() reads a real <run>_passrate.json series
+#                            for Screen 1 when a trainer logs one (else None -> demo curve).
 # ==========================================================================
 
 from __future__ import annotations
@@ -94,6 +96,29 @@ def load_attribution(run_path: Path) -> pd.DataFrame:
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     return df
+
+
+def load_passrate(run_path: Path) -> Optional[dict]:
+    """Load a real pass-rate series sidecar (<run>_passrate.json) if the trainer logged one.
+
+    Reads: <run>_passrate.json next to the run file. Returns {iterations, pass_rate} when
+    present + valid, else None so Screen 1 shows an honestly-labelled demo curve. (The
+    current producer is a single rollout, not a training run, so it does NOT write this;
+    this hook lets a real walk-forward trainer feed Screen 1 when that lands.)
+    """
+    import json
+    p = Path(run_path)
+    side = p.with_name(p.stem + "_passrate.json")
+    if not side.exists():
+        return None
+    try:
+        d = json.loads(side.read_text(encoding="utf-8"))
+        if "iterations" in d and "pass_rate" in d:
+            return {"iterations": list(d["iterations"]),
+                    "pass_rate": [float(x) for x in d["pass_rate"]]}
+    except Exception:                                    # malformed sidecar -> demo curve
+        return None
+    return None
 
 
 def header_feature_names(records: List[dict]) -> Optional[List[str]]:

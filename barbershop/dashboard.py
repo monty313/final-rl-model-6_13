@@ -62,6 +62,9 @@
 #   [2026-06-16] [Claude] — WI-3/4: quantra bundle loads real attribution + computes
 #                            unavailable_fields dynamically; advantage strip + attribution
 #                            panel grey out honestly (do not fake) when a run lacks them.
+#   [2026-06-16] [Claude] — WI-8: memoise the mock bundle (built once, not per render);
+#                            Screen 1 shows an honest 'Demo curve' note + disables the 60s
+#                            'live' tick unless a real pass-rate sidecar is present.
 # ==========================================================================
 
 from __future__ import annotations
@@ -121,22 +124,30 @@ def load_bundle(source: str = "mock", use_mock: Optional[bool] = None) -> Dict[s
         source = "mock" if use_mock else "spec"
     if source == "quantra":
         return load_quantra_bundle()
-    if source == "spec":
-        traj = data.load_trajectory()
-        shap = data.load_shap()
-        prices = {tf: data.load_prices(tf) for tf in config.TIMEFRAMES}
-    else:                                                # "mock"
-        traj = data.make_mock_trajectory()
-        shap = data.make_mock_shap()
-        prices = data.make_mock_prices()
+    if source == "mock":
+        global _MOCK_BUNDLE
+        if _MOCK_BUNDLE is None:                         # build the deterministic mock ONCE
+            _MOCK_BUNDLE = {
+                "trajectory": data.make_mock_trajectory(), "shap": data.make_mock_shap(),
+                "prices": data.make_mock_prices(), "training_wall": _mock_training_wall(),
+                "training_wall_real": False, "source": "mock",
+                "feature_names": data.MOCK_FEATURE_NAMES, "unavailable_fields": []}
+        return _MOCK_BUNDLE
+    # "spec" — the spec's logs/*.parquet (fail-loud if missing).
+    traj = data.load_trajectory()
+    shap = data.load_shap()
+    prices = {tf: data.load_prices(tf) for tf in config.TIMEFRAMES}
     return {"trajectory": traj, "shap": shap, "prices": prices,
-            "training_wall": _mock_training_wall(), "source": source,
-            "feature_names": data.MOCK_FEATURE_NAMES, "unavailable_fields": []}
+            "training_wall": _mock_training_wall(), "training_wall_real": False,
+            "source": source, "feature_names": data.MOCK_FEATURE_NAMES,
+            "unavailable_fields": data.detect_unavailable(traj, shap)}
 
 
-# Cache the (expensive) real-run bundle by run-file path so screen navigation
-# doesn't re-parse the JSONL + re-resample ~250k price bars on every click.
+# Cache the (expensive) real-run bundle by run-file path so screen navigation doesn't
+# re-parse the JSONL + re-resample ~250k price bars on every click; the deterministic
+# mock bundle is built once too (it was previously regenerated on every render).
 _QUANTRA_CACHE: Dict[str, Dict[str, Any]] = {}
+_MOCK_BUNDLE: Optional[Dict[str, Any]] = None
 
 
 def load_quantra_bundle() -> Dict[str, Any]:
@@ -167,9 +178,13 @@ def load_quantra_bundle() -> Dict[str, Any]:
     # Real input-gradient attribution from the producer's sidecar (autopsy RIGHT column),
     # or an empty frame for older runs without it.
     shap = adapter.load_attribution(latest)
+    # Real pass-rate series for Screen 1 if the trainer logged one; else a demo curve
+    # (flagged training_wall_real=False so the UI never claims synthetic data is real).
+    passrate = adapter.load_passrate(latest)
+    training_wall = passrate if passrate else _mock_training_wall()
     bundle = {"trajectory": traj, "shap": shap, "prices": prices,
-              "training_wall": _mock_training_wall(), "source": "quantra",
-              "feature_names": fnames,
+              "training_wall": training_wall, "training_wall_real": passrate is not None,
+              "source": "quantra", "feature_names": fnames,
               # HONEST: compute what's genuinely missing on THIS run (not a static list),
               # so a run that now HAS advantage/SHAP doesn't falsely show them as absent.
               "unavailable_fields": data.detect_unavailable(traj, shap)}
@@ -226,20 +241,35 @@ def _unavailable_panel(title: str, reason: str) -> html.Div:
 # SCREEN BUILDERS — each returns a Dash component tree from the data bundle.
 # ==========================================================================
 def screen_training_wall(bundle: Dict[str, Any]) -> html.Div:
-    """Screen 1 — the live training-wall pass-rate chart + status panel + plateau banner."""
+    """Screen 1 — the training-wall pass-rate chart + status panel + plateau banner.
+
+    HONEST: the curve is only labelled "live" / real when a real pass-rate series was
+    logged for the run; otherwise it's flagged as a demo curve (the trainer doesn't
+    record pass-rate over iterations yet), so a real run never shows synthetic data as
+    if it were the model's true learning curve.
+    """
     tw = bundle["training_wall"]
+    is_real = bundle.get("training_wall_real", False)
     fig = figures.training_wall_figure(tw["iterations"], tw["pass_rate"])
     plateau = figures.is_plateaued(tw["pass_rate"])
-    children = [
-        html.H3("Screen 1 — Training Wall"),
+    children = [html.H3("Screen 1 — Training Wall")]
+    if not is_real:                                      # don't pass synthetic off as real
+        children.append(html.Div(
+            "ℹ️ Demo curve — no real pass-rate series is logged for this run yet "
+            "(the trainer doesn't record pass-rate over training iterations). This panel "
+            "is illustrative until that's wired.", id="training-wall-demo-note",
+            style={"background": "rgba(229,188,36,0.18)", "padding": "6px",
+                   "borderRadius": "6px", "fontSize": "12px", "marginBottom": "6px"}))
+    children += [
         dcc.Graph(id="training-wall-graph", figure=fig),
-        # Live refresh every 60s (spec). Disabled in mock mode would still tick;
-        # the callback simply rebuilds the (mock) curve.
-        dcc.Interval(id="training-wall-interval", interval=config.TRAINING_WALL_REFRESH_MS),
+        # 60s refresh: only meaningful for a live training run; on a demo curve it just
+        # re-renders. The note above keeps the "live" claim honest.
+        dcc.Interval(id="training-wall-interval", interval=config.TRAINING_WALL_REFRESH_MS,
+                     disabled=not is_real),
         html.Div([
             html.Span(f"Current iteration: {tw['iterations'][-1]:,}  |  "),
             html.Span(f"Best pass rate: {max(tw['pass_rate']):.1f}%  |  "),
-            html.Span("Last checkpoint: (mock)"),
+            html.Span("Source: " + ("real training run" if is_real else "demo (mock)")),
         ], style={"padding": "6px"}),
     ]
     if plateau:
