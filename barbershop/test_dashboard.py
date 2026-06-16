@@ -31,6 +31,16 @@ from barbershop import config, data, dashboard, figures
 # --------------------------------------------------------------------------
 # TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC.
 # --------------------------------------------------------------------------
+def test_contract_is_single_source_of_truth():
+    """WI-7 — config + data reference the one contract module (no drift between them)."""
+    from barbershop import contract
+    assert config.ACTIONS is contract.ACTIONS
+    assert config.ENGINE_ACTION_INTS is contract.ENGINE_ACTION_INTS
+    assert config.PLACEHOLDER_FIELDS is contract.PLACEHOLDER_FIELDS
+    assert data.required_trajectory_columns() == contract.TRAJECTORY_COLUMNS
+    assert data.required_shap_columns() == contract.SHAP_COLUMNS
+
+
 def test_data_loading_and_columns_and_utc(barbershop_tmp, mock_trajectory, mock_prices):
     """TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC."""
     traj_path = data.save_trajectory(mock_trajectory, config.DATA_DIR / "trajectory.parquet")

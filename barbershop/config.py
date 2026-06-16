@@ -155,20 +155,20 @@ PLATEAU_CHECKPOINTS: int = 3             # flat for this many checkpoints -> ban
 # close] (spec Section 4). The live engine uses ints {HOLD:0, OPEN_LONG:1,
 # OPEN_SHORT:2, CLOSE:3} — adapter.py maps between the two.
 # --------------------------------------------------------------------------
-# Contract fields the LIVE telemetry pipeline does NOT yet produce — they appear
-# as NaN/placeholder on real runs. The Risk Doctor flags these as "do not cite as
-# evidence" so a fabricated NaN can never be passed off as a real metric.
-PLACEHOLDER_FIELDS: list[str] = ["advantage", "shap_toward", "shap_away", "regime"]
+# Contract constants live in barbershop/contract.py (the single source of truth); they
+# are re-exported here so existing config.* references keep working. PLACEHOLDER_FIELDS:
+# fields the live pipeline may not produce — flagged so a NaN is never cited as evidence.
+from barbershop.contract import (  # noqa: E402  (re-export of the data contract)
+    ACTIONS, ENGINE_ACTION_INTS, PLACEHOLDER_FIELDS,
+)
 
-ACTIONS: list[str] = ["OPEN_LONG", "OPEN_SHORT", "HOLD", "CLOSE"]
+# Per-action icons (UI only — stays in config; keyed by the contract ACTIONS).
 ACTION_ICONS: dict[str, str] = {
     "OPEN_LONG": "⬆️",   # up arrow
     "OPEN_SHORT": "⬇️",  # down arrow
     "HOLD": "⬜",              # white square
     "CLOSE": "\U0001f534",         # red circle
 }
-# Engine int -> dashboard action string (used by the adapter).
-ENGINE_ACTION_INTS: dict[int, str] = {0: "HOLD", 1: "OPEN_LONG", 2: "OPEN_SHORT", 3: "CLOSE"}
 
 # --------------------------------------------------------------------------
 # TIMEFRAME CONTEXT WINDOWS (Screen 3). Minutes of context to show on EACH side

@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from barbershop import config
+from barbershop import config, contract
 
 
 # ==========================================================================
@@ -81,14 +81,8 @@ def _producer_for(path: Path) -> str:
 # DATA CONTRACT — the columns the dashboard expects (spec Section 4).
 # ==========================================================================
 def required_trajectory_columns() -> List[str]:
-    """Return the list of columns trajectory.parquet must contain (spec Section 4)."""
-    return [
-        "timestamp", "day_id", "step", "action", "action_prob", "all_probs",
-        "masked_actions", "advantage", "value_estimate", "reward",
-        "pnl_cumulative", "dd_buffer", "trade_open", "trade_direction",
-        "trade_pnl", "law_state", "obs_vector", "regime", "pass_result",
-        "dd_breached",
-    ]
+    """Return the columns trajectory.parquet must contain (from the contract module)."""
+    return list(contract.TRAJECTORY_COLUMNS)
 
 
 def validate_trajectory_columns(df: pd.DataFrame) -> List[str]:
@@ -97,8 +91,8 @@ def validate_trajectory_columns(df: pd.DataFrame) -> List[str]:
 
 
 def required_shap_columns() -> List[str]:
-    """Columns shap_values.parquet must contain (spec Section 4)."""
-    return ["timestamp", "day_id", "step", "chosen_action", "shap_toward", "shap_away"]
+    """Columns shap_values.parquet must contain (from the contract module)."""
+    return list(contract.SHAP_COLUMNS)
 
 
 def detect_unavailable(trajectory: pd.DataFrame, shap: Optional[pd.DataFrame]) -> List[str]:

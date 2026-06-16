@@ -94,7 +94,7 @@ this drift already caused two review bugs.
 and placeholder fields; refactor `data`, `adapter`, `config` to import from it. Behaviour
 identical; tests stay green.
 **Acceptance.** One module defines the contract; `data`/`adapter` reference it; full suite green.
-**Status:** [ ]
+**Status:** [x] DONE 2026-06-16 — barbershop/contract.py is the single source; config + data re-export/reference it (same objects). Test asserts no drift. 35 tests pass.
 
 ## WI-8 — Perf + Screen-1 honesty  🟡
 **Problem.** The mock bundle is rebuilt on every render; Screen 1's training wall is synthetic
@@ -115,7 +115,7 @@ real series when present); a test covers the label/real-series branch.
 - [x] WI-4 Dynamic placeholder detection + grey-out
 - [x] WI-5 Risk Doctor context budget
 - [x] WI-6 Robust Doctor parsing
-- [ ] WI-7 Single contract source
+- [x] WI-7 Single contract source
 - [ ] WI-8 Perf + Screen-1 honesty
 
 ## Update log
