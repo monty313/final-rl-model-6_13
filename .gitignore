@@ -7,6 +7,9 @@ artifacts/
 *.csv
 # tiny fixture CSVs for unit tests are allowed:
 !tests/**/*.csv
+# Barbershop runtime telemetry inputs + exports (generated, not source):
+logs/
+models/
 
 # --- Python ---
 __pycache__/

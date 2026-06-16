@@ -1,0 +1,187 @@
+# ==========================================================================
+# FILE: barbershop/test_dashboard.py
+# PURPOSE: Tests 1-10 for the Barbershop dashboard (spec Section 5). All tests
+#          use SYNTHETIC MOCK DATA (no real training run). They exercise the
+#          pure data/figure logic behind every screen so the suite runs fast and
+#          offline. Run: pytest barbershop/test_dashboard.py
+# ==========================================================================
+#
+# UPDATE LOG — every change to this file must be logged here:
+#   [2026-06-15] [Claude] — First build. Tests 1-10: data loading, scoreboard,
+#                            timeframe windows, advantage alignment, heatmap
+#                            colours, autopsy panels, SHAP, pattern finder,
+#                            missing-file banner, higher-TF vertical line.
+# ==========================================================================
+
+from __future__ import annotations
+
+import json
+
+import pandas as pd
+import pytest
+
+from barbershop import config, data, dashboard, figures
+
+
+# --------------------------------------------------------------------------
+# TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC.
+# --------------------------------------------------------------------------
+def test_data_loading_and_columns_and_utc(barbershop_tmp, mock_trajectory, mock_prices):
+    traj_path = data.save_trajectory(mock_trajectory, config.DATA_DIR / "trajectory.parquet")
+    price_paths = data.save_prices(mock_prices, config.DATA_DIR)
+
+    loaded = data.load_trajectory(traj_path)                  # loads without error
+    assert data.validate_trajectory_columns(loaded) == []     # every contract column present
+    assert str(loaded["timestamp"].dt.tz) == "UTC"            # timestamps parse as UTC
+
+    for tf, p in price_paths.items():
+        px = data.load_prices(tf, p)
+        assert {"open", "high", "low", "close"}.issubset(px.columns)
+        assert str(px["timestamp"].dt.tz) == "UTC"
+
+
+# --------------------------------------------------------------------------
+# TEST 2 — Day scoreboard: 4 cards, correct PASS/FAIL, worst (breached) first.
+# --------------------------------------------------------------------------
+def test_day_scoreboard_renders_and_sorts_worst_first(mock_trajectory):
+    cards = data.day_scoreboard(mock_trajectory)
+    assert len(cards) == 4                                     # one card per training day
+    assert cards[0]["dd_status"] == "Breached"                # worst day sorted first
+    # The breached day is a FAIL; at least one PASS exists among the four.
+    assert cards[0]["passed"] is False
+    assert any(c["passed"] for c in cards)
+    # Severity order is non-increasing (breached -> warning -> safe).
+    sev = {"Breached": 0, "Warning": 1, "Safe": 2}
+    order = [sev[c["dd_status"]] for c in cards]
+    assert order == sorted(order)
+
+
+# --------------------------------------------------------------------------
+# TEST 3 — Timeframe switching: entry +/- exact window per TF.
+# --------------------------------------------------------------------------
+def test_timeframe_windows_are_exact():
+    entry = pd.Timestamp("2024-03-14 09:42", tz="UTC")
+    expect = {"1m": 30, "5m": 120, "30m": 720, "4H": 5 * 24 * 60}   # minutes each side
+    for tf, minutes in expect.items():
+        start, end = data.timeframe_window(entry, tf)
+        assert end - entry == pd.Timedelta(minutes=minutes)
+        assert entry - start == pd.Timedelta(minutes=minutes)
+
+
+# --------------------------------------------------------------------------
+# TEST 4 — Advantage strip alignment: Panel 2 x-axis matches Panel 1 exactly.
+# --------------------------------------------------------------------------
+def test_advantage_strip_aligns_with_candles(mock_trajectory, mock_prices):
+    day_id = 2
+    trades = data.extract_trades(mock_trajectory, day_id)
+    entry = trades[0]["entry_time"]
+    window = data.timeframe_window(entry, "1m")
+    candle = figures.candlestick_figure(mock_prices["1m"], trades, "1m", entry, window=window)
+    adv = data.advantage_series(mock_trajectory, day_id)
+    adv_fig = figures.advantage_figure(adv, window=window)
+    # Same x-axis range on both panels (shared time axis -> no off-by-one).
+    assert list(candle.layout.xaxis.range) == list(adv_fig.layout.xaxis.range)
+    # Every advantage timestamp inside the window exists in the 1m candle series.
+    candle_times = set(pd.to_datetime(mock_prices["1m"]["timestamp"], utc=True))
+    in_window = adv[(adv["timestamp"] >= window[0]) & (adv["timestamp"] <= window[1])]
+    assert set(in_window["timestamp"]).issubset(candle_times)
+
+
+# --------------------------------------------------------------------------
+# TEST 5 — Indicator heatmap colours.
+# --------------------------------------------------------------------------
+def test_heatmap_colour_assignment():
+    assert data.cell_color("challenge_health", "dd_buffer", 0.15) == config.COLOR_RED
+    assert data.cell_color("volatility", "atr_level_1m", 0.0003) == config.COLOR_YELLOW
+    assert data.cell_color("laws_gates", "law_super_trend_bb", "ACTIVE") == config.COLOR_GREEN
+
+
+# --------------------------------------------------------------------------
+# TEST 6 — Trade autopsy panels.
+# --------------------------------------------------------------------------
+def test_trade_autopsy_panels(mock_trajectory):
+    day_id = 2
+    trades = data.extract_trades(mock_trajectory, day_id)
+    assert len(trades) >= 3                                    # trade ③ exists on this day
+    tr = trades[2]                                            # the third trade
+    row = mock_trajectory[(mock_trajectory["day_id"] == day_id)
+                          & (mock_trajectory["timestamp"] == tr["entry_time"])].iloc[0]
+    # LEFT — 5 indicator groups.
+    groups = data.group_indicators(row)
+    assert len(groups) == 5
+    # MIDDLE — 4 probability bars summing to ~1, exactly one chosen (gold border).
+    bars = data.action_probability_bars(row)
+    assert len(bars) == 4
+    assert abs(sum(b["prob"] for b in bars) - 1.0) < 1e-6
+    assert sum(1 for b in bars if b["chosen"]) == 1
+    # Masked actions are available to label.
+    masked, legal = data.masked_legal(row)
+    assert set(masked).issubset(set(config.ACTIONS))
+    assert set(masked).isdisjoint(set(legal))
+
+
+# --------------------------------------------------------------------------
+# TEST 7 — SHAP panel: toward green desc, away red desc, explained variance.
+# --------------------------------------------------------------------------
+def test_shap_panel_sorted_and_grouped():
+    shap_row = pd.Series({
+        "shap_toward": {"cci10_5m": 0.5, "boll_bb20_up_5m": 0.3, "ssma_align_5m": 0.1},
+        "shap_away": {"atr_level_1m": 0.4, "tw_cci_block": 0.2},
+    })
+    s = data.shap_sorted(shap_row, "OPEN_SHORT")
+    assert len(s["toward"]) == 3 and len(s["away"]) == 2
+    toward_vals = [v for _, v in s["toward"]]
+    away_vals = [v for _, v in s["away"]]
+    assert toward_vals == sorted(toward_vals, reverse=True)    # toward sorted descending
+    assert away_vals == sorted(away_vals, reverse=True)        # away sorted descending
+    assert s["explained"] > 0                                  # explained variance shown
+    fig = figures.shap_figure(s)                               # renders without error
+    assert len(fig.data) == 2                                  # toward + away groups
+
+
+# --------------------------------------------------------------------------
+# TEST 8 — Pattern finder: 8/12 shared condition -> Pattern 1; APPLY exports JSON.
+# --------------------------------------------------------------------------
+def test_pattern_finder_detects_and_exports(barbershop_tmp):
+    losing = data.make_mock_losing_trades(n=12, n_with_pattern=8)
+    patterns = data.find_patterns(losing)
+    assert patterns[0]["count"] == 8 and patterns[0]["total"] == 12
+    assert patterns[0]["suggested_rule"]                       # non-empty prescription text
+    # [APPLY RULE] exports to logs/suggested_rules.json.
+    out = data.export_rule({"source": "pattern_finder", **patterns[0]})
+    assert out.exists()
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert isinstance(saved, list) and saved[-1]["count"] == 8
+
+
+# --------------------------------------------------------------------------
+# TEST 9 — Missing file error: red banner names the file + producer, no crash.
+# --------------------------------------------------------------------------
+def test_missing_file_shows_fail_loud_banner(barbershop_tmp):
+    missing = config.DATA_DIR / "trajectory.parquet"          # never created
+    with pytest.raises(data.MissingDataFile) as exc_info:
+        data.load_trajectory(missing)
+    banner = dashboard.error_banner(exc_info.value)
+    text = str(banner)                                        # flatten the component tree
+    assert "trajectory.parquet" in text                       # names WHICH file
+    assert "TelemetryLogger" in text                          # names WHAT produces it
+
+
+# --------------------------------------------------------------------------
+# TEST 10 — Higher-TF vertical entry line at the exact entry timestamp.
+# --------------------------------------------------------------------------
+def test_higher_tf_vertical_entry_line(mock_trajectory, mock_prices):
+    day_id = 2
+    trades = data.extract_trades(mock_trajectory, day_id)
+    entry = trades[0]["entry_time"]
+    for tf in ("5m", "30m", "4H"):
+        window = data.timeframe_window(entry, tf)
+        fig = figures.candlestick_figure(mock_prices[tf], trades, tf, entry, window=window)
+        line_shapes = [s for s in fig.layout.shapes if s.type == "line"]
+        assert line_shapes, f"no entry vline on {tf}"
+        # The line sits at the exact entry timestamp.
+        assert pd.Timestamp(line_shapes[0].x0) == entry
+    # On 1m there is no entry vline (spec: higher-TFs only).
+    win1 = data.timeframe_window(entry, "1m")
+    fig1 = figures.candlestick_figure(mock_prices["1m"], trades, "1m", entry, window=win1)
+    assert not [s for s in fig1.layout.shapes if s.type == "line"]
