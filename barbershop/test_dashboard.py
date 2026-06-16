@@ -30,6 +30,7 @@ from barbershop import config, data, dashboard, figures
 # TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC.
 # --------------------------------------------------------------------------
 def test_data_loading_and_columns_and_utc(barbershop_tmp, mock_trajectory, mock_prices):
+    """TEST 1 — Data loading: trajectory + price CSVs load, columns present, UTC."""
     traj_path = data.save_trajectory(mock_trajectory, config.DATA_DIR / "trajectory.parquet")
     price_paths = data.save_prices(mock_prices, config.DATA_DIR)
 
@@ -47,6 +48,7 @@ def test_data_loading_and_columns_and_utc(barbershop_tmp, mock_trajectory, mock_
 # TEST 2 — Day scoreboard: 4 cards, correct PASS/FAIL, worst (breached) first.
 # --------------------------------------------------------------------------
 def test_day_scoreboard_renders_and_sorts_worst_first(mock_trajectory):
+    """TEST 2 — Day scoreboard: 4 cards, correct PASS/FAIL, worst (breached) first."""
     cards = data.day_scoreboard(mock_trajectory)
     assert len(cards) == 4                                     # one card per training day
     assert cards[0]["dd_status"] == "Breached"                # worst day sorted first
@@ -63,6 +65,7 @@ def test_day_scoreboard_renders_and_sorts_worst_first(mock_trajectory):
 # TEST 3 — Timeframe switching: entry +/- exact window per TF.
 # --------------------------------------------------------------------------
 def test_timeframe_windows_are_exact():
+    """TEST 3 — Timeframe switching: entry +/- exact window per TF."""
     entry = pd.Timestamp("2024-03-14 09:42", tz="UTC")
     expect = {"1m": 30, "5m": 120, "30m": 720, "4H": 5 * 24 * 60}   # minutes each side
     for tf, minutes in expect.items():
@@ -75,6 +78,7 @@ def test_timeframe_windows_are_exact():
 # TEST 4 — Advantage strip alignment: Panel 2 x-axis matches Panel 1 exactly.
 # --------------------------------------------------------------------------
 def test_advantage_strip_aligns_with_candles(mock_trajectory, mock_prices):
+    """TEST 4 — Advantage strip alignment: Panel 2 x-axis matches Panel 1 exactly."""
     day_id = 2
     trades = data.extract_trades(mock_trajectory, day_id)
     entry = trades[0]["entry_time"]
@@ -97,6 +101,7 @@ def test_advantage_strip_aligns_with_candles(mock_trajectory, mock_prices):
 # TEST 5 — Indicator heatmap colours.
 # --------------------------------------------------------------------------
 def test_heatmap_colour_assignment():
+    """TEST 5 — Indicator heatmap colours."""
     assert data.cell_color("challenge_health", "dd_buffer", 0.15) == config.COLOR_RED
     assert data.cell_color("volatility", "atr_level_1m", 0.0003) == config.COLOR_YELLOW
     assert data.cell_color("laws_gates", "law_super_trend_bb", "ACTIVE") == config.COLOR_GREEN
@@ -113,6 +118,7 @@ def test_heatmap_colour_assignment():
 # TEST 6 — Trade autopsy panels.
 # --------------------------------------------------------------------------
 def test_trade_autopsy_panels(mock_trajectory):
+    """TEST 6 — Trade autopsy panels."""
     day_id = 2
     trades = data.extract_trades(mock_trajectory, day_id)
     assert len(trades) >= 3                                    # trade ③ exists on this day
@@ -137,6 +143,7 @@ def test_trade_autopsy_panels(mock_trajectory):
 # TEST 7 — SHAP panel: toward green desc, away red desc, explained variance.
 # --------------------------------------------------------------------------
 def test_shap_panel_sorted_and_grouped():
+    """TEST 7 — SHAP panel: toward green desc, away red desc, explained variance."""
     shap_row = pd.Series({
         "shap_toward": {"cci10_5m": 0.5, "boll_bb20_up_5m": 0.3, "ssma_align_5m": 0.1},
         "shap_away": {"atr_level_1m": 0.4, "tw_cci_block": 0.2},
@@ -160,6 +167,7 @@ def test_shap_panel_sorted_and_grouped():
 # TEST 8 — Pattern finder: 8/12 shared condition -> Pattern 1; APPLY exports JSON.
 # --------------------------------------------------------------------------
 def test_pattern_finder_detects_and_exports(barbershop_tmp):
+    """TEST 8 — Pattern finder: 8/12 shared condition -> Pattern 1; APPLY exports JSON."""
     losing = data.make_mock_losing_trades(n=12, n_with_pattern=8)
     patterns = data.find_patterns(losing)
     assert patterns[0]["count"] == 8 and patterns[0]["total"] == 12
@@ -179,6 +187,7 @@ def test_pattern_finder_detects_and_exports(barbershop_tmp):
 # TEST 9 — Missing file error: red banner names the file + producer, no crash.
 # --------------------------------------------------------------------------
 def test_missing_file_shows_fail_loud_banner(barbershop_tmp):
+    """TEST 9 — Missing file error: red banner names the file + producer, no crash."""
     missing = config.DATA_DIR / "trajectory.parquet"          # never created
     with pytest.raises(data.MissingDataFile) as exc_info:
         data.load_trajectory(missing)
@@ -192,6 +201,7 @@ def test_missing_file_shows_fail_loud_banner(barbershop_tmp):
 # TEST 10 — Higher-TF vertical entry line at the exact entry timestamp.
 # --------------------------------------------------------------------------
 def test_higher_tf_vertical_entry_line(mock_trajectory, mock_prices):
+    """TEST 10 — Higher-TF vertical entry line at the exact entry timestamp."""
     day_id = 2
     trades = data.extract_trades(mock_trajectory, day_id)
     entry = trades[0]["entry_time"]
@@ -212,6 +222,7 @@ def test_higher_tf_vertical_entry_line(mock_trajectory, mock_prices):
 # EXTRA — Screen 1 plateau banner actually renders on a flat curve.
 # --------------------------------------------------------------------------
 def test_plateau_banner_renders_on_flat_curve():
+    """EXTRA — Screen 1 plateau banner actually renders on a flat curve."""
     assert figures.is_plateaued([81.0, 81.2, 80.9, 81.1]) is True     # flat -> plateau
     assert figures.is_plateaued([10.0, 40.0, 70.0, 95.0]) is False    # rising -> not
     # The shipped mock curve is flattened at the tail, so the banner is present.
@@ -226,6 +237,7 @@ def test_plateau_banner_renders_on_flat_curve():
 # (The review found these buttons had NO callbacks — the only write path was dead.)
 # --------------------------------------------------------------------------
 def test_write_path_callbacks_are_registered():
+    """EXTRA — the sanctioned write-path callbacks (APPLY / APPROVE) are actually wired."""
     app = dashboard.make_app(use_mock=True)
     keys = " ".join(app.callback_map.keys())
     assert "pattern-export-status" in keys      # [APPLY RULE] -> export_rule is wired

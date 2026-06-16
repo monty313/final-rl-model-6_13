@@ -34,16 +34,24 @@ from barbershop import config, data, doctor_chat, risk_doctor
 # Helpers: a mock OpenAI-compatible client (success + offline variants).
 # --------------------------------------------------------------------------
 class _MockMessage:
-    def __init__(self, content): self.message = type("M", (), {"content": content})
+    """A stand-in for one OpenAI choice (exposes .message.content)."""
+
+    def __init__(self, content):
+        """Wrap `content` as the .message.content the Doctor reads."""
+        self.message = type("M", (), {"content": content})
 
 
 class _MockCompletions:
+    """A stand-in for client.chat.completions: returns canned text or raises."""
+
     def __init__(self, content, raise_exc=None):
+        """Store the canned response text (or an exception to raise) + a call counter."""
         self._content = content
         self._raise = raise_exc
         self.calls = 0
 
     def create(self, **kwargs):
+        """Count the call and return the canned completion (or raise the offline error)."""
         self.calls += 1
         if self._raise:
             raise self._raise
@@ -54,11 +62,14 @@ class MockLLM:
     """Minimal stand-in for openai.OpenAI exposing .chat.completions.create()."""
 
     def __init__(self, content="ok", raise_exc=None):
+        """Build the mock client with a canned response (or an exception to raise)."""
         self._completions = _MockCompletions(content, raise_exc)
         self.chat = type("C", (), {"completions": self._completions})
 
     @property
-    def calls(self): return self._completions.calls
+    def calls(self):
+        """How many times the mock LLM was called (0 == never reached the LLM)."""
+        return self._completions.calls
 
 
 # A correctly-formatted 6-section Doctor response (spec Section D format).
@@ -78,6 +89,7 @@ SCREEN3 = {"screen": 3, "day_id": 2, "trade_id": 3}
 # TEST 11 — Context packet assembly (all four parts present).
 # --------------------------------------------------------------------------
 def test_context_packet_assembly(mock_trajectory, mock_shap):
+    """TEST 11 — Context packet assembly (all four parts present)."""
     packet = risk_doctor.assemble_context_packet(
         "Why did the bot fail Day 2?", SCREEN3, history=[],
         trajectory=mock_trajectory, shap=mock_shap,
@@ -94,6 +106,7 @@ def test_context_packet_assembly(mock_trajectory, mock_shap):
 # TEST 12 — Response format validation: all six sections render with icons.
 # --------------------------------------------------------------------------
 def test_response_renders_six_sections():
+    """TEST 12 — Response format validation: all six sections render with icons."""
     sections = doctor_chat.format_sections(GOOD_RESPONSE)
     assert len(sections) == 6
     icons = [s["icon"] for s in sections]
@@ -115,6 +128,7 @@ def test_response_renders_six_sections():
 # TEST 13 — Missing operating manual: Doctor offline, LLM not called (RULE 6).
 # --------------------------------------------------------------------------
 def test_missing_manual_takes_doctor_offline(barbershop_tmp, monkeypatch):
+    """TEST 13 — Missing operating manual: Doctor offline, LLM not called (RULE 6)."""
     missing = barbershop_tmp / "docs" / "NOPE.md"               # does not exist
     monkeypatch.setattr(config, "mlp_manual_path", lambda: missing)
     client = MockLLM(GOOD_RESPONSE)
@@ -128,6 +142,7 @@ def test_missing_manual_takes_doctor_offline(barbershop_tmp, monkeypatch):
 # TEST 14 — Approve prescription -> suggested_rules.json + log flagged exported.
 # --------------------------------------------------------------------------
 def test_approve_prescription_exports_and_flags(barbershop_tmp, mock_trajectory, mock_shap):
+    """TEST 14 — Approve prescription -> suggested_rules.json + log flagged exported."""
     client = MockLLM(GOOD_RESPONSE)
     q = "Why did Day 2 fail?"
     resp = risk_doctor.ask(q, SCREEN3, trajectory=mock_trajectory, shap=mock_shap, client=client)
@@ -146,6 +161,7 @@ def test_approve_prescription_exports_and_flags(barbershop_tmp, mock_trajectory,
 # TEST 15 — Context indicator updates on navigation.
 # --------------------------------------------------------------------------
 def test_context_indicator_updates():
+    """TEST 15 — Context indicator updates on navigation."""
     s2 = {"screen": 2, "day_id": 2, "trade_id": None}
     s3 = {"screen": 3, "day_id": 2, "trade_id": 3}
     assert risk_doctor.context_label(s2) == "Screen 2 — Day 2 — No trade selected"
@@ -158,6 +174,7 @@ def test_context_indicator_updates():
 # TEST 16 — Full diagnosis trigger: system prompt carries the doc template.
 # --------------------------------------------------------------------------
 def test_full_diagnosis_includes_template(mock_trajectory):
+    """TEST 16 — Full diagnosis trigger: system prompt carries the doc template."""
     packet = risk_doctor.assemble_context_packet(
         "full diagnosis", {"screen": 3, "day_id": 2, "trade_id": None}, history=[],
         trajectory=mock_trajectory, manual_text="MANUAL", full_diagnosis=True)
@@ -174,6 +191,7 @@ def test_full_diagnosis_includes_template(mock_trajectory):
 # TEST 17 — No execution authority (RULE 7): refuse a live-trade question.
 # --------------------------------------------------------------------------
 def test_no_execution_authority(barbershop_tmp):
+    """TEST 17 — No execution authority (RULE 7): refuse a live-trade question."""
     client = MockLLM(GOOD_RESPONSE)
     resp = risk_doctor.ask("Should I go long on EURUSD now?", SCREEN3, client=client)
     assert resp["refused"] is True
@@ -186,6 +204,7 @@ def test_no_execution_authority(barbershop_tmp):
 # TEST 18 — Conversation history capped at the last 6 exchanges.
 # --------------------------------------------------------------------------
 def test_history_capped_at_six(mock_trajectory):
+    """TEST 18 — Conversation history capped at the last 6 exchanges."""
     history = [(f"QUESTION_{i}", f"ANSWER_{i}") for i in range(10)]
     packet = risk_doctor.assemble_context_packet(
         "new q", SCREEN3, history=history, trajectory=mock_trajectory, manual_text="M")
@@ -201,6 +220,7 @@ def test_history_capped_at_six(mock_trajectory):
 # TEST 19 — Diagnosis log append: 3 questions -> 3 valid JSON objects.
 # --------------------------------------------------------------------------
 def test_diagnosis_log_appends(barbershop_tmp, mock_trajectory, mock_shap):
+    """TEST 19 — Diagnosis log append: 3 questions -> 3 valid JSON objects."""
     client = MockLLM(GOOD_RESPONSE)
     for q in ("q one", "q two", "q three"):
         risk_doctor.ask(q, SCREEN3, trajectory=mock_trajectory, shap=mock_shap, client=client)
@@ -216,6 +236,7 @@ def test_diagnosis_log_appends(barbershop_tmp, mock_trajectory, mock_shap):
 # TEST 20 — Offline LLM graceful failure: message shown, question saved as OFFLINE.
 # --------------------------------------------------------------------------
 def test_offline_llm_graceful(barbershop_tmp, mock_trajectory):
+    """TEST 20 — Offline LLM graceful failure: message shown, question saved as OFFLINE."""
     client = MockLLM(raise_exc=ConnectionError("server down"))
     resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=mock_trajectory, client=client)
     assert resp["offline"] is True
@@ -230,6 +251,7 @@ def test_offline_llm_graceful(barbershop_tmp, mock_trajectory):
 # TEST 21 — RULE 8: no day/trade selected -> ask Monty to pick one, no LLM call.
 # --------------------------------------------------------------------------
 def test_no_context_guard(barbershop_tmp):
+    """TEST 21 — RULE 8: no day/trade selected -> ask Monty to pick one, no LLM call."""
     client = MockLLM(GOOD_RESPONSE)
     resp = risk_doctor.ask("why?", {"screen": 1, "day_id": None, "trade_id": None}, client=client)
     assert resp["text"] == config.DOCTOR_NO_CONTEXT
@@ -241,6 +263,7 @@ def test_no_context_guard(barbershop_tmp):
 # evidence, the LLM is NOT called (the Doctor can't diagnose what it can't see).
 # --------------------------------------------------------------------------
 def test_empty_telemetry_refuses_to_fabricate(barbershop_tmp):
+    """TEST 22 — anti-fabrication: a selected day with NO telemetry -> insufficient"""
     client = MockLLM(GOOD_RESPONSE)
     resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=None, client=client)
     assert resp.get("insufficient_evidence") is True
@@ -253,6 +276,7 @@ def test_empty_telemetry_refuses_to_fabricate(barbershop_tmp):
 # to LOW confidence and flagged UNVERIFIED.
 # --------------------------------------------------------------------------
 def test_zero_evidence_answer_is_downgraded(barbershop_tmp, mock_trajectory):
+    """TEST 23 — anti-fabrication: an answer citing ZERO telemetry fields is forced"""
     client = MockLLM("The model looked fine to me. Confidence: HIGH")   # cites no field
     resp = risk_doctor.ask("Why did Day 2 fail?", SCREEN3, trajectory=mock_trajectory, client=client)
     assert resp["fields_cited"] == []
@@ -264,6 +288,7 @@ def test_zero_evidence_answer_is_downgraded(barbershop_tmp, mock_trajectory):
 # TEST 24 — RULE 7 holds for PARAPHRASES, but diagnostic questions are answered.
 # --------------------------------------------------------------------------
 def test_live_trade_paraphrases_refused(barbershop_tmp):
+    """TEST 24 — RULE 7 holds for PARAPHRASES, but diagnostic questions are answered."""
     client = MockLLM(GOOD_RESPONSE)
     for q in ("Is now a good time to buy EURUSD?", "should I be long here?",
               "do I enter a long position right now?", "should i short this?",

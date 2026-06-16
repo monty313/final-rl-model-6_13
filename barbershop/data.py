@@ -704,6 +704,7 @@ def losing_trades(trajectory: pd.DataFrame) -> pd.DataFrame:
     atr_idx = next((i for i, n in enumerate(MOCK_FEATURE_NAMES) if n.startswith("atr")), None)
 
     def _atr_value(row) -> float:
+        """Return |the row's ATR observation feature| (NaN if no ATR feature exists)."""
         obs = list(row.get("obs_vector", []))
         return abs(float(obs[atr_idx])) if (atr_idx is not None and atr_idx < len(obs)) else float("nan")
 
