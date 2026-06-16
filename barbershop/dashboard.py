@@ -44,6 +44,12 @@
 #                            banner when the Doctor is asked with missing telemetry.
 #   [2026-06-15] [Claude] — Audit fix: __main__ now auto-opens the browser
 #                            (spec Section 0: "your browser will open automatically").
+#   [2026-06-16] [Claude] — Real-data integration: load_bundle gained source=
+#                            mock|quantra|spec; load_quantra_bundle() maps the latest
+#                            artifacts/telemetry/*.jsonl via adapter (cached) with
+#                            empty SHAP + flagged placeholders; available_source()
+#                            auto-detects a real run; header shows the data source;
+#                            __main__ launches on the real run when present.
 # ==========================================================================
 
 from __future__ import annotations
@@ -54,7 +60,7 @@ import numpy as np
 import pandas as pd
 from dash import ALL, MATCH, Dash, Input, Output, State, ctx, dcc, html, no_update
 
-from barbershop import config, data, doctor_chat, figures, risk_doctor
+from barbershop import adapter, config, data, doctor_chat, figures, risk_doctor
 
 
 # ==========================================================================
@@ -62,23 +68,84 @@ from barbershop import config, data, doctor_chat, figures, risk_doctor
 # to deterministic mock data so `python barbershop/dashboard.py` runs out of the
 # box with no training run.
 # ==========================================================================
-def load_bundle(use_mock: bool = True) -> Dict[str, Any]:
+def available_source() -> str:
+    """Pick the best data source available: a real Quantra run if one exists, else mock.
+
+    Reads: artifacts/telemetry/*.jsonl (via adapter.list_real_runs). Returns "quantra"
+    when a real training run is present so the dashboard shows YOUR actual output, else
+    "mock" so a fresh checkout still runs out of the box.
+    """
+    try:
+        return "quantra" if adapter.list_real_runs() else "mock"
+    except Exception:                                    # any IO/quantra issue -> safe default
+        return "mock"
+
+
+def load_bundle(source: str = "mock", use_mock: Optional[bool] = None) -> Dict[str, Any]:
     """Load everything the screens need (trajectory, shap, prices, training wall).
 
-    Reads: the logs/ + data/ files when use_mock is False; otherwise builds
-    deterministic mock data. Returns a dict bundle. With use_mock=False a missing
-    file raises data.MissingDataFile, which the caller turns into a red banner.
+    Reads: depends on `source`:
+      "mock"    — deterministic synthetic data (default; runs with no training run);
+      "quantra" — the latest REAL run in artifacts/telemetry/*.jsonl, mapped onto the
+                  contract by barbershop.adapter (advantage/SHAP shown as not-yet-produced);
+      "spec"    — the spec's logs/*.parquet + data/prices_*.csv (fail-loud if missing).
+    `use_mock` (legacy) overrides: True -> "mock", False -> "spec".
+    Returns a dict bundle. A missing required file raises data.MissingDataFile, which the
+    caller turns into a red banner (RULE 4).
     """
-    if use_mock:
-        traj = data.make_mock_trajectory()
-        shap = data.make_mock_shap()
-        prices = data.make_mock_prices()
-    else:
+    if use_mock is not None:                             # back-compat with the old kwarg
+        source = "mock" if use_mock else "spec"
+    if source == "quantra":
+        return load_quantra_bundle()
+    if source == "spec":
         traj = data.load_trajectory()
         shap = data.load_shap()
         prices = {tf: data.load_prices(tf) for tf in config.TIMEFRAMES}
+    else:                                                # "mock"
+        traj = data.make_mock_trajectory()
+        shap = data.make_mock_shap()
+        prices = data.make_mock_prices()
     return {"trajectory": traj, "shap": shap, "prices": prices,
-            "training_wall": _mock_training_wall()}
+            "training_wall": _mock_training_wall(), "source": source,
+            "unavailable_fields": []}
+
+
+# Cache the (expensive) real-run bundle by run-file path so screen navigation
+# doesn't re-parse the JSONL + re-resample ~250k price bars on every click.
+_QUANTRA_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def load_quantra_bundle() -> Dict[str, Any]:
+    """Build a dashboard bundle from the latest REAL Quantra telemetry run.
+
+    Reads: the newest artifacts/telemetry/<run>.jsonl via barbershop.adapter, and the
+    real 1m export resampled to each timeframe. Returns the same bundle shape as
+    load_bundle, with: SHAP empty (the live pipeline doesn't produce it yet), and
+    `unavailable_fields` listing the placeholder columns so the UI can flag them.
+    Raises data.MissingDataFile if there is no real run to show.
+    """
+    runs = adapter.list_real_runs()
+    if not runs:
+        raise data.MissingDataFile(config.REAL_TELEMETRY_DIR,
+                                   "quantra TelemetryLogger (run training first)")
+    latest = runs[-1]
+    key = str(latest)
+    if key in _QUANTRA_CACHE:
+        return _QUANTRA_CACHE[key]
+    records = adapter.load_real_run(latest)
+    traj = adapter.real_to_trajectory(records)
+    # Real candles from the 1m export; fall back to mock candles if it isn't present.
+    try:
+        prices = adapter.resample_prices_from_1m()
+    except Exception:
+        prices = data.make_mock_prices()
+    # SHAP isn't produced by the live pipeline yet -> an empty, correctly-typed frame.
+    shap = pd.DataFrame(columns=data.required_shap_columns())
+    bundle = {"trajectory": traj, "shap": shap, "prices": prices,
+              "training_wall": _mock_training_wall(), "source": "quantra",
+              "unavailable_fields": list(adapter.NOT_YET_PRODUCED)}
+    _QUANTRA_CACHE[key] = bundle
+    return bundle
 
 
 def _mock_training_wall(n: int = 40, seed: int = 1) -> Dict[str, List[float]]:
@@ -297,19 +364,29 @@ def _pattern_block(p: Dict[str, Any]) -> html.Div:
 # ==========================================================================
 # THE APP.
 # ==========================================================================
-def make_app(use_mock: bool = True) -> Dash:
+def make_app(source: Optional[str] = None, use_mock: Optional[bool] = None) -> Dash:
     """Build the Dash app: tab nav over the 5 screens + the Risk Doctor chat box.
 
-    Reads: the data bundle (mock by default). Returns a configured Dash app with
-    all callbacks registered. RULE 3: nothing here writes outside logs/.
+    Reads: the data bundle for `source` ("mock" | "quantra" | "spec"). `use_mock`
+    (legacy) maps True->"mock", False->"spec". Default source is "mock" so tests +
+    a fresh checkout run offline; __main__ launches with available_source() so a real
+    training run is shown automatically when present. Returns a configured Dash app
+    with all callbacks registered. RULE 3: nothing here writes outside logs/.
     """
+    if use_mock is not None:
+        source = "mock" if use_mock else "spec"
+    source = source or "mock"
     app = Dash(__name__, suppress_callback_exceptions=True)
-    init_state = {"screen": 1, "day_id": None, "trade_id": None, "tf": "1m", "use_mock": use_mock}
+    init_state = {"screen": 1, "day_id": None, "trade_id": None, "tf": "1m", "source": source}
+    src_label = {"mock": "MOCK data (no training run loaded)",
+                 "quantra": "REAL Quantra telemetry", "spec": "spec logs/*.parquet"}[source]
 
     app.layout = html.Div([
         dcc.Store(id="screen-state", data=init_state),
         dcc.Store(id="last-diagnosis", data=None),        # latest (q, text) for [APPROVE]
         html.H2("Quantra Barbershop — training diagnostics"),
+        html.Div(f"Data source: {src_label}", style={"color": config.COLOR_GREY,
+                                                      "fontSize": "12px", "marginBottom": "6px"}),
         dcc.Tabs(id="screen-tabs", value="s1", children=[
             dcc.Tab(label="1 · Training Wall", value="s1"),
             dcc.Tab(label="2 · Scoreboard", value="s2"),
@@ -325,27 +402,47 @@ def make_app(use_mock: bool = True) -> Dash:
     return app
 
 
+def _source_note(bundle: Dict[str, Any]):
+    """A small amber note for REAL runs listing the not-yet-produced placeholder fields.
+
+    Reads: the bundle's unavailable_fields. Returns an html.Div (or None for mock) so
+    Monty knows which columns are placeholders on a real run and must not be trusted.
+    """
+    unavailable = bundle.get("unavailable_fields") or []
+    if not unavailable:
+        return None
+    return html.Div(
+        "ℹ️ Real run: these fields are not produced by the live pipeline yet and show as "
+        "placeholders — " + ", ".join(unavailable),
+        style={"background": "rgba(229,188,36,0.18)", "padding": "6px",
+               "borderRadius": "6px", "fontSize": "12px", "marginBottom": "6px"})
+
+
 def _content_for(state: Dict[str, Any]) -> html.Div:
     """Render the active screen, catching a missing-file error into a red banner."""
     try:
-        bundle = load_bundle(use_mock=state.get("use_mock", True))
+        bundle = load_bundle(source=state.get("source", "mock"))
     except data.MissingDataFile as exc:
         return error_banner(exc)                          # RULE 4 — fail loud
     screen = state.get("screen", 1)
     if screen == 1:
-        return screen_training_wall(bundle)
-    if screen == 2:
-        return screen_scoreboard(bundle)
-    if screen == 3:
-        return screen_day_replay(bundle, state.get("day_id") or 1,
+        body = screen_training_wall(bundle)
+    elif screen == 2:
+        body = screen_scoreboard(bundle)
+    elif screen == 3:
+        body = screen_day_replay(bundle, state.get("day_id") or 1,
                                  state.get("tf", "1m"), state.get("trade_id"))
-    if screen == 4:
+    elif screen == 4:
         if state.get("day_id") is None or state.get("trade_id") is None:
-            return html.Div("Click a trade marker on Screen 3 to open the autopsy.")
-        return screen_autopsy(bundle, state["day_id"], state["trade_id"])
-    if screen == 5:
-        return screen_pattern_finder(bundle)
-    return html.Div("Unknown screen.")
+            body = html.Div("Click a trade marker on Screen 3 to open the autopsy.")
+        else:
+            body = screen_autopsy(bundle, state["day_id"], state["trade_id"])
+    elif screen == 5:
+        body = screen_pattern_finder(bundle)
+    else:
+        body = html.Div("Unknown screen.")
+    note = _source_note(bundle)                           # placeholder warning on real runs
+    return html.Div([note, body]) if note is not None else body
 
 
 def _register_callbacks(app: Dash) -> None:
@@ -423,7 +520,7 @@ def _register_callbacks(app: Dash) -> None:
         if not q:
             return convo, no_update
         try:
-            bundle = load_bundle(use_mock=(state or {}).get("use_mock", True))
+            bundle = load_bundle(source=(state or {}).get("source", "mock"))
             traj, shap = bundle["trajectory"], bundle["shap"]
             missing = None
         except data.MissingDataFile as exc:
@@ -471,7 +568,7 @@ def _register_callbacks(app: Dash) -> None:
         if not clicks or not any(clicks):
             return no_update
         rank = ctx.triggered_id["index"]                  # which pattern's APPLY fired
-        bundle = load_bundle(use_mock=(state or {}).get("use_mock", True))
+        bundle = load_bundle(source=(state or {}).get("source", "mock"))
         losing = data.losing_trades(bundle["trajectory"])
         if len(losing) < 3:
             losing = data.make_mock_losing_trades()
@@ -514,4 +611,4 @@ if __name__ == "__main__":          # pragma: no cover (manual launch only)
         webbrowser.open(url)
     except Exception:                # headless / no browser -> just print the URL
         pass
-    make_app(use_mock=True).run(host=config.DASH_HOST, port=config.DASH_PORT, debug=False)
+    make_app(source=available_source()).run(host=config.DASH_HOST, port=config.DASH_PORT, debug=False)

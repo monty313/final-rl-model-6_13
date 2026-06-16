@@ -14,6 +14,8 @@
 #   [2026-06-15] [Claude] — Review fixes: de-vacuum TESTs 4/5/7/8 (exact window,
 #                            ATR danger branch, real SHAP truncation, specificity
 #                            tiebreak); added plateau-banner + write-path-wiring tests.
+#   [2026-06-16] [Claude] — Added test_quantra_source_loads_real_run: the real
+#                            Quantra-telemetry path is detected + mapped + flagged.
 # ==========================================================================
 
 from __future__ import annotations
@@ -242,3 +244,41 @@ def test_write_path_callbacks_are_registered():
     keys = " ".join(app.callback_map.keys())
     assert "pattern-export-status" in keys      # [APPLY RULE] -> export_rule is wired
     assert "doctor-approve-status" in keys       # [APPROVE] -> approve_prescription is wired
+
+
+# --------------------------------------------------------------------------
+# EXTRA — the REAL-data path: a Quantra telemetry JSONL run is auto-detected,
+# mapped onto the contract by the adapter, and its not-yet-produced fields flagged.
+# --------------------------------------------------------------------------
+def test_quantra_source_loads_real_run(tmp_path, monkeypatch):
+    """EXTRA — real Quantra telemetry is detected, mapped (regime/pass), placeholders flagged."""
+    tdir = tmp_path / "telemetry"; tdir.mkdir()
+    run = tdir / "run1.jsonl"
+    records = [
+        {"kind": "header", "schema_version": "1.0.0"},
+        {"kind": "day", "episode_id": 0, "regime": "Trending",
+         "pass_result": True, "dd_breached": False},
+        {"kind": "step", "episode_id": 0, "timestep": 0, "timestamp": "2024-03-11T08:00:00Z",
+         "chosen_action": 1, "action_probs": [0.1, 0.7, 0.1, 0.1], "legal_actions": [0, 1, 2],
+         "value": 0.2, "observation": [0.0, 0.1, -0.2],
+         "law_states": [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+         "risk_context": {"trailing_buffer": 0.8, "daily_pnl": 1.2},
+         "reward_decomposition": {"l0": 0.1}},
+    ]
+    run.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    # Point the adapter at our synthetic run dir; avoid reading the real 1m export.
+    monkeypatch.setattr(config, "REAL_TELEMETRY_DIR", tdir)
+    monkeypatch.setattr(dashboard.adapter, "resample_prices_from_1m",
+                        lambda *a, **k: data.make_mock_prices())
+    dashboard._QUANTRA_CACHE.clear()
+    # Auto-detection prefers the real run.
+    assert dashboard.available_source() == "quantra"
+    bundle = dashboard.load_bundle(source="quantra")
+    assert bundle["source"] == "quantra"
+    # The day packet's regime + pass_result were mapped onto the step row (the bug the
+    # review caught — episode_id 0-based vs day_id 1-based — stays fixed here).
+    assert list(bundle["trajectory"]["regime"]) == ["Trending"]
+    assert bool(bundle["trajectory"]["pass_result"].iloc[0]) is True
+    # SHAP isn't produced by the live pipeline yet -> empty, and the placeholders are flagged.
+    assert bundle["shap"].empty
+    assert "advantage" in bundle["unavailable_fields"]
