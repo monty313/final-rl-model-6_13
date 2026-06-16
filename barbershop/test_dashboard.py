@@ -320,3 +320,26 @@ def test_group_indicators_uses_real_feature_names():
     row2 = pd.Series({"obs_vector": [0.0] * len(data.MOCK_FEATURE_NAMES),
                       "law_state": {}, "dd_buffer": 0.8, "pnl_cumulative": 0.0, "trade_pnl": 0.0})
     assert data.group_indicators(row2)                      # doesn't crash
+
+
+# --------------------------------------------------------------------------
+# WI-2 — the adapter reads REAL GAE advantage that the producer logged in
+# outcome.advantage (so the advantage strip is real, not empty, on real runs).
+# --------------------------------------------------------------------------
+def test_adapter_reads_real_advantage_from_outcome():
+    """WI-2 — adapter maps outcome.advantage onto the contract advantage column."""
+    from barbershop import adapter
+    base = dict(chosen_action=0, action_probs=[1, 0, 0, 0], legal_actions=[0], value=0.1,
+                observation=[0.0], law_states=[0] * 12, risk_context={}, reward_decomposition={})
+    records = [
+        {"kind": "header"},
+        {"kind": "step", "episode_id": 0, "timestep": 0, "timestamp": "2024-03-11T08:00:00Z",
+         "outcome": {"advantage": 0.42}, **base},
+        {"kind": "step", "episode_id": 0, "timestep": 1, "timestamp": "2024-03-11T08:01:00Z",
+         "outcome": {"advantage": -0.17}, **base},
+    ]
+    df = adapter.real_to_trajectory(records)
+    assert list(df["advantage"]) == [0.42, -0.17]           # real, both signs, not NaN
+    # And a step with no logged advantage stays NaN (honest absence).
+    df2 = adapter.real_to_trajectory([{"kind": "step", "episode_id": 0, "timestep": 0, **base}])
+    assert df2["advantage"].isna().all()

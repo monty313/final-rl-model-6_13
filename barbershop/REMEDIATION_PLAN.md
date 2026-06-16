@@ -34,7 +34,9 @@ correctness issue.)*
 γ/λ from the trainer) and log it per step; the adapter reads it. Advantage becomes REAL.
 **Acceptance.** A re-emitted real run has non-NaN advantage with both signs; the advantage
 strip renders; `advantage` drops out of the "not produced" list for that run.
-**Status:** [ ]
+**Status:** [x] DONE 2026-06-16 — re-emitted run: advantage non-NaN for all 5,565 steps,
+range −1.17…1.27, both signs. Producer computes per-day GAE (locked γ/λ); adapter reads
+`outcome.advantage`. *(The "not produced" banner cleanup is WI-4.)*
 
 ## WI-3 — Real attribution for the autopsy RIGHT column  🟠
 **Problem.** SHAP is random mock numbers; empty on real runs. The marquee feature is a stub.
@@ -101,7 +103,7 @@ real series when present); a test covers the label/real-series branch.
 
 ## Checklist (mirror of the above — tick on commit)
 - [x] WI-1 Real feature names on real data
-- [ ] WI-2 Real GAE advantage
+- [x] WI-2 Real GAE advantage
 - [ ] WI-3 Real input-gradient attribution
 - [ ] WI-4 Dynamic placeholder detection + grey-out
 - [ ] WI-5 Risk Doctor context budget

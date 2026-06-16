@@ -29,6 +29,7 @@ from quantra.env.trading_env import TradingEnv, prepare_symbol_data, SymbolData 
 from quantra.learning_system.ppo_agent.agent import PPOAgent                    # noqa: E402
 from quantra.market_pipeline.law_mask_engine.engine import build_pointer_mask   # noqa: E402
 from quantra.market_pipeline.feature_builder.schema import STATE_DIM            # noqa: E402
+from quantra.learning_system.trainer.gae import compute_gae                    # noqa: E402
 from quantra.diagnostics.telemetry_logger.logger import TelemetryLogger, StepPacket  # noqa: E402
 
 
@@ -95,12 +96,26 @@ def main():
     cur_date = test.dates[env.t] if test.dates is not None else 0
     day_start_t = env.t
     day_rets: list = []
+    day_steps: list = []        # (packet, reward, value) buffered to compute GAE at day close
     done = False
     step_in_day = 0
     total_steps = 0
 
-    def close_day(eid: int, rets: list):
-        """Emit the per-day packet (regime + pass/breach) the scoreboard reads."""
+    def flush_day(eid: int, steps: list, rets: list):
+        """Compute REAL per-day GAE advantage, attach it to each step, then log the day.
+
+        Advantage is a rollout-level quantity (locked gamma=0.997/lambda=0.97), so we
+        buffer the day's steps and compute it here, treating the day end as a terminal
+        segment. Each step's advantage goes into its outcome dict; the adapter reads it.
+        """
+        if steps:
+            rewards = torch.tensor([s[1] for s in steps], dtype=torch.float32)
+            values = torch.tensor([s[2] for s in steps], dtype=torch.float32)
+            dones = torch.zeros(len(steps), dtype=torch.float32); dones[-1] = 1.0  # day end terminal
+            adv, _ret = compute_gae(rewards, values, dones, 0.0)   # locked gamma/lambda
+            for (pkt, _r, _v), a_val in zip(steps, adv.tolist()):
+                pkt.outcome["advantage"] = float(a_val)            # REAL GAE advantage
+                log.log_step(pkt)
         passed = bool(env.account.target_hit and not env.account.breached)
         log.log_day({"episode_id": eid, "day_id": eid + 1,
                      "regime": _regime_label(np.asarray(rets, float)),
@@ -159,7 +174,7 @@ def main():
             value=float(value[0]), hidden_summary=[],
             reward_decomposition={"total": float(reward)}, quad_signals={},
             risk_context=risk_context, outcome={"realized": float(info.get("realized", 0.0))})
-        log.log_step(packet)
+        day_steps.append((packet, float(reward), float(value[0])))   # advantage filled at day close
         total_steps += 1
         step_in_day += 1
 
@@ -168,14 +183,15 @@ def main():
             obs = obs2
             new_date = test.dates[env.t] if test.dates is not None else 0
             if new_date != date_id:
-                close_day(episode_id, day_rets)
+                flush_day(episode_id, day_steps, day_rets)
                 episode_id += 1
+                day_steps = []
                 day_rets = []
                 step_in_day = 0
                 if episode_id >= a.days:                    # recorded enough real days
                     break
 
-    close_day(episode_id, day_rets)                         # final (partial) day
+    flush_day(episode_id, day_steps, day_rets)              # final (partial) day
     path = log.flush()
     size_mb = path.stat().st_size / 1e6
     print(f"[emit] {total_steps:,} real steps across {episode_id + 1} day(s) -> {path}  ({size_mb:.1f} MB)")

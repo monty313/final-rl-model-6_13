@@ -37,6 +37,8 @@
 #                            (RULE 3 — no write outside logs/ unless opted in).
 #   [2026-06-16] [Claude] — WI-1: header_feature_names() surfaces the real schema
 #                            feature names so the dashboard labels the obs correctly.
+#   [2026-06-16] [Claude] — WI-2: advantage now read from outcome.advantage (the
+#                            producer logs REAL per-day GAE); NaN only when truly absent.
 # ==========================================================================
 
 from __future__ import annotations
@@ -158,7 +160,8 @@ def real_to_trajectory(records: List[dict]) -> pd.DataFrame:
             "action_prob": float(all_probs[config.ACTIONS.index(action)]) if all_probs else 0.0,
             "all_probs": all_probs,
             "masked_actions": masked,
-            "advantage": float("nan"),                    # NOT logged per step -> flagged
+            # REAL GAE advantage when the producer logged it (outcome.advantage); else NaN.
+            "advantage": float((r.get("outcome", {}) or {}).get("advantage", float("nan"))),
             "value_estimate": float(r.get("value", float("nan"))),
             "reward": float(sum((r.get("reward_decomposition", {}) or {}).values())),
             "pnl_cumulative": float(risk.get("daily_pnl", risk.get("pnl", float("nan")))),
