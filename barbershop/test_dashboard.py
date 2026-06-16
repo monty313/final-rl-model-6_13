@@ -246,6 +246,18 @@ def test_write_path_callbacks_are_registered():
     assert "doctor-approve-status" in keys       # [APPROVE] -> approve_prescription is wired
 
 
+def test_enter_key_sends_to_doctor():
+    """EXTRA — the chat input's Enter key (n_submit) is wired to the send callback (spec)."""
+    app = dashboard.make_app(use_mock=True)
+    # Find a callback that takes doctor-input.n_submit as an Input (Enter-to-send).
+    found = False
+    for spec in app.callback_map.values():
+        for inp in spec.get("inputs", []):
+            if inp.get("id") == "doctor-input" and inp.get("property") == "n_submit":
+                found = True
+    assert found, "Enter key (doctor-input.n_submit) is not wired to send"
+
+
 # --------------------------------------------------------------------------
 # EXTRA — the REAL-data path: a Quantra telemetry JSONL run is auto-detected,
 # mapped onto the contract by the adapter, and its not-yet-produced fields flagged.

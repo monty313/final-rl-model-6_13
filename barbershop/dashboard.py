@@ -50,9 +50,27 @@
 #                            empty SHAP + flagged placeholders; available_source()
 #                            auto-detects a real run; header shows the data source;
 #                            __main__ launches on the real run when present.
+#   [2026-06-16] [Claude] — BOSS-review fixes: (1) `python barbershop/dashboard.py`
+#                            crashed with ModuleNotFoundError (script mode had only
+#                            barbershop/ on sys.path) — bootstrap the repo root onto
+#                            sys.path; verified the server now serves HTTP 200.
+#                            (2) Enter key now sends in the chat (doctor-input.n_submit
+#                            wired) per spec "Also sends on Enter key".
 # ==========================================================================
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# Allow the spec's documented launch `python barbershop/dashboard.py` to work: in
+# script mode Python only puts barbershop/ on sys.path, so `from barbershop import ...`
+# fails with ModuleNotFoundError. Put the repo root on sys.path. No-op when imported
+# normally (as a package) or under pytest (which already sets the path).
+if __package__ in (None, ""):                            # running as a bare script
+    _ROOT = str(Path(__file__).resolve().parents[1])
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)
 
 from typing import Any, Dict, List, Optional
 
@@ -507,12 +525,13 @@ def _register_callbacks(app: Dash) -> None:
     @app.callback(Output("doctor-conversation", "children"),
                   Output("last-diagnosis", "data"),
                   Input("doctor-send", "n_clicks"),
+                  Input("doctor-input", "n_submit"),       # Enter key in the input (spec)
                   Input("doctor-full-diagnosis", "n_clicks"),
                   State("doctor-input", "value"),
                   State("doctor-conversation", "children"),
                   State("screen-state", "data"),
                   prevent_initial_call=True)
-    def doctor_send(send_n, full_n, question, convo, state):
+    def doctor_send(send_n, submit_n, full_n, question, convo, state):
         """Send Monty's question (or a full diagnosis) to the Doctor; append the reply."""
         convo = list(convo or [])
         full = ctx.triggered_id == "doctor-full-diagnosis"
