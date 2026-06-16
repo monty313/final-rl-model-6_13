@@ -322,3 +322,25 @@ def test_manual_condensed_keeps_safety_backbone_under_budget():
     assert len(pk["system"]) < len(full)                   # much smaller than the full manual
     # A short manual (e.g. the test marker) passes through unchanged.
     assert risk_doctor.condense_manual("tiny manual", config.DOCTOR_MANUAL_MAX_CHARS) == "tiny manual"
+
+
+# --------------------------------------------------------------------------
+# WI-6 — response parsing is robust: sections recovered from TITLES when a local
+# model drops the emoji icons, and a shapeless blob degrades cleanly (not lost).
+# --------------------------------------------------------------------------
+def test_doctor_parsing_robust_to_missing_icons():
+    """WI-6 — parse from titles when icons absent; blob -> 'What I see'; prescription found."""
+    titles = ("What I'm looking at: Screen 3.\nWhat I see: advantage went negative.\n"
+              "What it means for passing: breach risk.\nWhat to do next: add an OPEN penalty.\n"
+              "What NOT to do: do not touch laws.\nConfidence: LOW")
+    secs = doctor_chat.format_sections(titles)
+    assert "advantage went negative" in secs[1]["body"]     # 🔍 routed by title
+    assert "add an OPEN penalty" in secs[3]["body"]          # ✅ routed by title
+    assert secs[5]["body"].strip() == "LOW"                 # 📊 confidence
+    # The prescription is found even without the emoji marker.
+    assert "add an OPEN penalty" in risk_doctor._extract_prescription(titles)
+    # A blob with neither icons nor titles -> kept in 'What I see', others insufficient.
+    blob = "the bot just looked bad and overtraded"
+    b = doctor_chat.format_sections(blob)
+    assert b[1]["body"] == blob
+    assert all(b[i]["body"] == "insufficient evidence" for i in (0, 2, 3, 4, 5))

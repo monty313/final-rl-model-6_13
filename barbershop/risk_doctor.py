@@ -489,13 +489,24 @@ def approve_prescription(question: str, doctor_text: str,
 
 
 def _extract_prescription(text: str) -> str:
-    """Pull the actionable recommendation ('What to do next' / 'Prescription') out."""
+    """Pull the actionable recommendation out of a Doctor response, robustly.
+
+    Reads: the response text. Tries, in order: a line containing 'what to do next' /
+    'prescription', then the ✅ section marker (the recommendation section), and falls
+    back to a trimmed summary — so the export still works when a local model paraphrases
+    the header or drops the colon.
+    """
     lines = (text or "").splitlines()
+    markers = ("what to do next", "prescription", "✅")    # header phrasings or the icon
     for i, line in enumerate(lines):
         low = line.lower()
-        if "what to do next" in low or "prescription" in low:
+        if any(m in (low if m != "✅" else line) for m in markers):
             # Take the rest of this line after the colon, else the next non-empty line.
-            after = line.split(":", 1)[1].strip() if ":" in line else ""
+            after = line.split(":", 1)[1].strip() if ":" in line else line.replace("✅", "").strip()
+            # Drop a residual header phrase left on the same line.
+            for h in ("what to do next", "prescription"):
+                if after.lower().startswith(h):
+                    after = after[len(h):].lstrip(": ").strip()
             if after:
                 return after
             for nxt in lines[i + 1:]:

@@ -83,7 +83,9 @@ to a single "What I see" block when neither is found; `_extract_prescription` ga
 robust fallback. Tests cover a no-icon and a paraphrased response.
 **Acceptance.** A response with titles-but-no-icons parses into the right sections; a blob
 with neither degrades gracefully; prescription export still finds the recommendation.
-**Status:** [ ]
+**Status:** [x] DONE 2026-06-16 — titles-only responses parse correctly; a shapeless
+blob lands in "What I see" (not lost); _extract_prescription finds the recommendation
+without the emoji. Tests added.
 
 ## WI-7 — Single data-contract source of truth  🟡
 **Problem.** The contract shape lives in three places (mock generators, adapter, validators);
@@ -112,7 +114,7 @@ real series when present); a test covers the label/real-series branch.
 - [x] WI-3 Real input-gradient attribution
 - [x] WI-4 Dynamic placeholder detection + grey-out
 - [x] WI-5 Risk Doctor context budget
-- [ ] WI-6 Robust Doctor parsing
+- [x] WI-6 Robust Doctor parsing
 - [ ] WI-7 Single contract source
 - [ ] WI-8 Perf + Screen-1 honesty
 

@@ -19,6 +19,9 @@
 #   [2026-06-15] [Claude] — Adversarial-review fixes: segment response sections by
 #                            unique ICON (robust to paraphrase); added the
 #                            doctor-approve-status line for the [APPROVE] write path.
+#   [2026-06-16] [Claude] — WI-6: format_sections falls back to section TITLES when a
+#                            local model drops the emoji icons, and to a single
+#                            'What I see' block when neither is present (reply not lost).
 # ==========================================================================
 
 from __future__ import annotations
@@ -43,22 +46,42 @@ def format_sections(doctor_text: str) -> List[Dict[str, str]]:
     "insufficient evidence" so the UI never renders a blank header.
     """
     text = doctor_text or ""
-    icons = [icon for icon, _ in config.DOCTOR_SECTIONS]
-    # Locate each section by its UNIQUE icon (robust to title wording / paraphrase;
-    # the system prompt tells the model to emit "{icon} {title}:" for each section).
-    positions = [text.find(icon) for icon in icons]
+    low = text.lower()
+    secs = config.DOCTOR_SECTIONS
+    # Locate each section by its UNIQUE icon if present, ELSE by its title text
+    # (a real local model may paraphrase or drop the emoji). pos_by_i[i] = (start, marker).
+    pos_by_i: Dict[int, Tuple[int, str]] = {}
+    for i, (icon, title) in enumerate(secs):
+        p = text.find(icon)
+        if p != -1:
+            pos_by_i[i] = (p, icon)
+        else:
+            tp = low.find(title.lower())
+            if tp != -1:
+                pos_by_i[i] = (tp, title)
+    # Neither icons nor titles anywhere -> put the whole reply in "What I see" (🔍)
+    # rather than losing it; the other sections show "insufficient evidence".
+    if not pos_by_i:
+        return [{"icon": ic, "title": ti,
+                 "body": (text.strip() if (j == 1 and text.strip()) else "insufficient evidence")}
+                for j, (ic, ti) in enumerate(secs)]
+    starts = sorted(p for p, _ in pos_by_i.values())
     sections: List[Dict[str, str]] = []
-    for i, (icon, title) in enumerate(config.DOCTOR_SECTIONS):
-        start = positions[i]
-        if start == -1:                                   # section absent in the text
+    for i, (icon, title) in enumerate(secs):
+        if i not in pos_by_i:
             sections.append({"icon": icon, "title": title, "body": "insufficient evidence"})
             continue
-        later = [p for p in positions[i + 1:] if p > start]
-        end = min(later) if later else len(text)          # up to the next section icon
-        chunk = text[start:end].replace(icon, "", 1).strip()
-        body = chunk.split(":", 1)[1].strip() if ":" in chunk else chunk.strip()
-        sections.append({"icon": icon, "title": title,
-                         "body": body or "insufficient evidence"})
+        start, _marker = pos_by_i[i]
+        ends = [p for p in starts if p > start]
+        chunk = text[start:(min(ends) if ends else len(text))].strip()
+        # Strip a leading "{icon} {title}:" / "{title}:" / "{icon}" header, however it appears.
+        if chunk.startswith(icon):
+            chunk = chunk[len(icon):].strip()
+        if chunk.lower().startswith(title.lower()):
+            chunk = chunk[len(title):].strip()
+        if chunk.startswith(":"):
+            chunk = chunk[1:].strip()
+        sections.append({"icon": icon, "title": title, "body": chunk or "insufficient evidence"})
     return sections
 
 
