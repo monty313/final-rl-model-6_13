@@ -35,6 +35,8 @@
 #                            1-based id space the steps look up (regime/pass_result
 #                            were silently lost); resample is in-memory by default
 #                            (RULE 3 — no write outside logs/ unless opted in).
+#   [2026-06-16] [Claude] — WI-1: header_feature_names() surfaces the real schema
+#                            feature names so the dashboard labels the obs correctly.
 # ==========================================================================
 
 from __future__ import annotations
@@ -63,6 +65,19 @@ def list_real_runs(telemetry_dir: Optional[Path] = None) -> List[Path]:
     if not d.exists():
         return []
     return sorted(d.glob("*.jsonl"))
+
+
+def header_feature_names(records: List[dict]) -> Optional[List[str]]:
+    """Return the run's real observation feature names from the telemetry header.
+
+    Reads: the loaded JSONL records. Returns the header's `feature_names` list (the
+    real STATE_DIM-wide schema names) so the dashboard can label the observation
+    correctly on a real run, or None if no header carries them.
+    """
+    for r in records:
+        if r.get("kind") == "header" and r.get("feature_names"):
+            return list(r["feature_names"])
+    return None
 
 
 def load_real_run(path: Path) -> List[dict]:

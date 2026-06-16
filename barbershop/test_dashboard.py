@@ -294,3 +294,29 @@ def test_quantra_source_loads_real_run(tmp_path, monkeypatch):
     # SHAP isn't produced by the live pipeline yet -> empty, and the placeholders are flagged.
     assert bundle["shap"].empty
     assert "advantage" in bundle["unavailable_fields"]
+
+
+# --------------------------------------------------------------------------
+# WI-1 — group_indicators uses the REAL feature names (not the 9-name mock set)
+# so the "What the bot SAW" panel + heatmap are correct on real 203-feature data.
+# --------------------------------------------------------------------------
+def test_group_indicators_uses_real_feature_names():
+    """WI-1 — real feature names label + categorise the obs correctly (not 9 mock names)."""
+    feature_names = ["boll_bb20_up_5m", "boll_bb200_mid_30m", "ssma_align_5m",
+                     "cci10_5m", "cci30_30m", "cci100_4H", "tw_cci_block",
+                     "atr_level_1m", "atr_dev_30m", "z10_1m", "adx5_1m"]
+    row = pd.Series({"obs_vector": [0.5, -0.3, 0.0, 1.2, -0.4, 0.1, 1.0, 0.6, -0.2, 0.3, 0.7],
+                     "law_state": {"gate_atr_liquidity": "ACTIVE"}, "dd_buffer": 0.8,
+                     "pnl_cumulative": 1.0, "trade_pnl": 0.0})
+    groups = data.group_indicators(row, feature_names)
+    by_key = {g["key"]: [c["name"] for c in g["cells"]] for g in groups}
+    assert "cci10_5m" in by_key["momentum"]                 # cci -> momentum
+    assert "boll_bb20_up_5m" in by_key["market_structure"]  # boll -> market structure
+    assert "atr_level_1m" in by_key["volatility"]           # atr -> volatility
+    # All 11 real market features are represented (not truncated to the 9 mock names).
+    total = sum(len(by_key[k]) for k in ("market_structure", "momentum", "volatility"))
+    assert total == 11
+    # The mock fallback still works when no names are supplied.
+    row2 = pd.Series({"obs_vector": [0.0] * len(data.MOCK_FEATURE_NAMES),
+                      "law_state": {}, "dd_buffer": 0.8, "pnl_cumulative": 0.0, "trade_pnl": 0.0})
+    assert data.group_indicators(row2)                      # doesn't crash

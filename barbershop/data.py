@@ -23,6 +23,8 @@
 #                            enrich losing_trades with atr_ratio + adv_neg_within_3
 #                            so all pattern predicates work on real runs, mark
 #                            dd_breached only on collapse bars, +__init__ docstring.
+#   [2026-06-16] [Claude] — WI-1: losing_trades takes feature_names so the ATR lookup
+#                            uses the REAL observation, not the 9-name mock fallback.
 # ==========================================================================
 
 from __future__ import annotations
@@ -683,25 +685,28 @@ _PATTERN_RULES = {
 }
 
 
-def losing_trades(trajectory: pd.DataFrame) -> pd.DataFrame:
+def losing_trades(trajectory: pd.DataFrame,
+                  feature_names: Optional[List[str]] = None) -> pd.DataFrame:
     """Extract losing trades (advantage < 0 AND trade closed at a loss), ENRICHED.
 
-    Reads: a trajectory DataFrame. Returns the CLOSE rows that lost money while the
-    critic was beaten (advantage < 0), each enriched with the derived predicate
-    columns the Pattern Finder needs so ALL conditions work on REAL trajectories
-    (not just the mock-loser fixture):
+    Reads: a trajectory DataFrame + the run's real `feature_names` (so the ATR lookup
+    indexes the REAL observation, not the 9-name mock fallback). Returns the CLOSE
+    rows that lost money while the critic was beaten (advantage < 0), each enriched
+    with the derived predicate columns the Pattern Finder needs so ALL conditions
+    work on REAL trajectories (not just the mock-loser fixture):
       - atr_ratio        = the bar's ATR feature / that day's mean ATR feature
       - adv_neg_within_3 = did advantage go negative within 3 steps after entry
     Missing ingredients degrade gracefully (atr_ratio defaults to 1.0).
     """
+    names = feature_names or MOCK_FEATURE_NAMES
     closes = trajectory[(trajectory["action"] == "CLOSE")
                         & (trajectory["advantage"] < 0)
                         & (trajectory["trade_pnl"] < 0)].copy()
     if closes.empty:
         return closes.reset_index(drop=True)
 
-    # Locate an ATR-like feature in the observation to build atr_ratio.
-    atr_idx = next((i for i, n in enumerate(MOCK_FEATURE_NAMES) if n.startswith("atr")), None)
+    # Locate an ATR-like feature in the REAL observation to build atr_ratio.
+    atr_idx = next((i for i, n in enumerate(names) if n.startswith("atr")), None)
 
     def _atr_value(row) -> float:
         """Return |the row's ATR observation feature| (NaN if no ATR feature exists)."""

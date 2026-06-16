@@ -23,7 +23,10 @@ heatmap label the first 9 indices with mock names. The telemetry header *has* th
 finder's ATR lookup too. Mock bundle carries `MOCK_FEATURE_NAMES`.
 **Acceptance.** On a real run, `group_indicators` uses the real schema names and categorises
 the real features; a test asserts a real obs maps to >9 named cells with correct categories.
-**Status:** [ ]
+**Status:** [x] DONE 2026-06-16 — real run now yields 218 correctly-categorised cells
+(203 features + 12 laws + 3 health) vs 9 mislabelled before. Test added. *(Noted follow-up:
+156 market-structure rows make the heatmap tall — a future UX grouping/collapse item, not a
+correctness issue.)*
 
 ## WI-2 — Real GAE advantage on real runs  🔴
 **Problem.** `advantage` is never produced; the Panel-2 strip is empty on real runs.
@@ -97,7 +100,7 @@ real series when present); a test covers the label/real-series branch.
 ---
 
 ## Checklist (mirror of the above — tick on commit)
-- [ ] WI-1 Real feature names on real data
+- [x] WI-1 Real feature names on real data
 - [ ] WI-2 Real GAE advantage
 - [ ] WI-3 Real input-gradient attribution
 - [ ] WI-4 Dynamic placeholder detection + grey-out

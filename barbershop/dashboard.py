@@ -56,6 +56,9 @@
 #                            sys.path; verified the server now serves HTTP 200.
 #                            (2) Enter key now sends in the chat (doctor-input.n_submit
 #                            wired) per spec "Also sends on Enter key".
+#   [2026-06-16] [Claude] — WI-1: bundle carries feature_names (real header names on a
+#                            quantra run); group_indicators + losing_trades receive them
+#                            so the SAW panel / heatmap / pattern-ATR are correct on real data.
 # ==========================================================================
 
 from __future__ import annotations
@@ -125,7 +128,7 @@ def load_bundle(source: str = "mock", use_mock: Optional[bool] = None) -> Dict[s
         prices = data.make_mock_prices()
     return {"trajectory": traj, "shap": shap, "prices": prices,
             "training_wall": _mock_training_wall(), "source": source,
-            "unavailable_fields": []}
+            "feature_names": data.MOCK_FEATURE_NAMES, "unavailable_fields": []}
 
 
 # Cache the (expensive) real-run bundle by run-file path so screen navigation
@@ -152,6 +155,7 @@ def load_quantra_bundle() -> Dict[str, Any]:
         return _QUANTRA_CACHE[key]
     records = adapter.load_real_run(latest)
     traj = adapter.real_to_trajectory(records)
+    fnames = adapter.header_feature_names(records) or data.MOCK_FEATURE_NAMES   # real labels
     # Real candles from the 1m export; fall back to mock candles if it isn't present.
     try:
         prices = adapter.resample_prices_from_1m()
@@ -161,7 +165,7 @@ def load_quantra_bundle() -> Dict[str, Any]:
     shap = pd.DataFrame(columns=data.required_shap_columns())
     bundle = {"trajectory": traj, "shap": shap, "prices": prices,
               "training_wall": _mock_training_wall(), "source": "quantra",
-              "unavailable_fields": list(adapter.NOT_YET_PRODUCED)}
+              "feature_names": fnames, "unavailable_fields": list(adapter.NOT_YET_PRODUCED)}
     _QUANTRA_CACHE[key] = bundle
     return bundle
 
@@ -291,7 +295,9 @@ def screen_day_replay(bundle: Dict[str, Any], day_id: int, tf: str = "1m",
         adv = data.advantage_series(traj, day_id)
         children.append(dcc.Graph(id="replay-advantage",
                                   figure=figures.advantage_figure(adv, window=window)))
-        grouped = [data.group_indicators(r) for _, r in day_rows.sort_values("timestamp").iterrows()]
+        fnames = bundle.get("feature_names")
+        grouped = [data.group_indicators(r, fnames)
+                   for _, r in day_rows.sort_values("timestamp").iterrows()]
         ts = list(day_rows.sort_values("timestamp")["timestamp"])
         children.append(dcc.Graph(id="replay-heatmap",
                                   figure=figures.heatmap_figure(grouped, ts)))
@@ -318,7 +324,7 @@ def screen_autopsy(bundle: Dict[str, Any], day_id: int, trade_id: int) -> html.D
     # The decision row = the trade's entry row.
     entry_rows = traj[(traj["day_id"] == day_id) & (traj["timestamp"] == tr["entry_time"])]
     row = entry_rows.iloc[0]
-    groups = data.group_indicators(row)
+    groups = data.group_indicators(row, bundle.get("feature_names"))
     bars = data.action_probability_bars(row)
     masked, legal = data.masked_legal(row)
     # SHAP for this trade step.
@@ -588,7 +594,7 @@ def _register_callbacks(app: Dash) -> None:
             return no_update
         rank = ctx.triggered_id["index"]                  # which pattern's APPLY fired
         bundle = load_bundle(source=(state or {}).get("source", "mock"))
-        losing = data.losing_trades(bundle["trajectory"])
+        losing = data.losing_trades(bundle["trajectory"], bundle.get("feature_names"))
         if len(losing) < 3:
             losing = data.make_mock_losing_trades()
         patterns = data.find_patterns(losing)
